@@ -1,0 +1,9 @@
+*~
+\#*
+.\#.*
+.hg
+.hgignore
+compiled
+bi.rkt
+examples
+nopush
