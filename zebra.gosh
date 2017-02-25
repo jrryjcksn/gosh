@@ -1,0 +1,77 @@
+:= position() -> 1||2||3||4||5 end.
+:= nationality() -> English||Swedish||Danish||German||Norwegian end.
+:= color() -> red||white||yellow||blue||green end.
+:= pet() -> dog||cats||horse||birds||zebra end.
+:= cigarette() -> Pall-Mall||Dunhill||Blend||Blue-Master||Prince end.
+:= drink() -> tea||milk||beer||coffee||water end.
+
+:= houses() ->
+   &[position=>&[], nationality=>&[], color=>&[],
+     pet=>&[], cigarette=>&[], drink=>&[]]
+end.
+
+:= house() ->
+   &[position=>position(), nationality=>nationality(), color=>color(),
+     pet=>pet(), cigarette=>cigarette(), drink=>drink()]
+end.
+
+:= compatible($house, $constraints) ->
+   !(..$constraints ~ $attribute=>$value when $house[$attribute] != $value)
+end.
+
+:= add-entry($housemaps, $attribute, $house) ->
+   $housemaps[$attribute] += ($house[$attribute]=>$house)
+end.
+
+:= extend($housemaps, $constraints) ->
+   (..$housemaps[position] ~ _=>$house
+        when compatible($house, $constraints) in $housemaps) ||
+   (&[position=>(position() when !(($housemaps[position])[%])),
+      nationality=>(nationality() when !(($housemaps[nationality])[%])),
+      color=>(color() when !(($housemaps[color])[%])),
+      pet=>(pet() when !(($housemaps[pet])[%])),
+      cigarette=>(cigarette() when !(($housemaps[cigarette])[%])),
+      drink=>(drink() when !(($housemaps[drink])[%]))] ~ $h
+         when compatible($h, $constraints) in
+         &[position=>add-entry($housemaps, position, $h),
+           nationality=>add-entry($housemaps, nationality, $h),
+           color=>add-entry($housemaps, color, $h),
+           pet=>add-entry($housemaps, pet, $h),
+           cigarette=>add-entry($housemaps, cigarette, $h),
+           drink=>add-entry($housemaps, drink, $h)])
+end.
+
+:= left-of($h1, $h2) -> $h1[position] == $h2[position] - 1 end.
+
+:= next-to($h1, $h2) -> ^(left-of($h1, $h2) || left-of($h2, $h1)) end.
+
+:= look-up($housemaps, $attribute, $value) ->
+   ($housemaps[$attribute])[$value]
+end.
+
+:= solve() ->
+   extend(houses(), &[nationality=>English, color=>red]) ~ $m1 in
+   extend($m1, &[nationality=>Swedish, pet=>dog]) ~ $m2 in
+   extend($m2, &[nationality=>Danish, drink=>tea]) ~ $m3 in
+   extend($m3, &[color=>green, drink=>coffee]) ~ $m4
+      when left-of(look-up($m4, color, green), look-up($m4, color, white)) in
+   extend($m4, &[cigarette=>Pall-Mall, pet=>birds]) ~ $m5 in
+   extend($m5, &[color=>yellow, cigarette=>Dunhill]) ~ $m6 in
+   extend($m6, &[position=>3, drink=>milk]) ~ $m7 in
+   extend($m7, &[position=>1, nationality=>Norwegian]) ~ $m8
+      when next-to(look-up($m8, nationality, Norwegian),
+                   look-up($m8, color, blue)) in
+   extend($m8, &[cigarette=>Blend]) ~ $m9
+      when next-to(look-up($m9, cigarette, Blend), look-up($m9, pet=>cats)) &&
+           next-to(look-up($m9, drink, water),
+                   look-up($m9, cigarette, Blend)) in
+   extend($m9, &[pet=>horse]) ~ $m11
+      when next-to(look-up($m11, cigarette, Dunhill),
+                   look-up($m11, pet=>horse)) in
+   extend($m11, &[cigarette=>Blue-Master, drink=>beer]) ~ $m12 in
+   extend($m12, &[nationality=>German, cigarette=>Prince])
+end.
+
+
+
+

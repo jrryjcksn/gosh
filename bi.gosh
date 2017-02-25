@@ -1,0 +1,246 @@
+# update a module of builtins
+:=! ubi[$mod] -> {; (update-builtin-module $mod) ;} && ok.
+:=! make_library[$mod] -> {; (make-lib $mod) ;}.
+:=! use[$library] -> {; (use-library $library) ;}.
+
+# raise an error and set status flag to 1
+:=! error $arglist=([$fmt . $args]) -> error[1 . $arglist].
+:=! error[$code, $fmt . $args] when integer[$code] ->
+    (; (lambda (ignore)
+         (begin (.cmd-success (= $code 0))
+                (set-code-set! #t)
+                (set-dollar-q $code)
+                (mapply fprintf (mcons (current-error-port)
+                                       (mcons $fmt (ensure-mlist $args))))
+                (.throw-to-or. $code))) ;).
+:=! error[$code, $msg] when integer[$code] -> error[$code, '~a~n', $msg].
+:=! error[$msg] -> error[1, $msg].
+
+# # flush the cache of already loaded modules (when something about the
+# # runtime changes).
+# :=! flush_module_cache[] ->
+
+:=! repl[] ->
+    {; (let loop ()
+         (if (display-error (lambda () (read-eval-print-loop)))
+             "ok"
+             (loop))) ;}.
+
+:=! sqrt[$n] -> {; (sqrt $n) ;}.
+:=! reverse[$l] ->
+    {; (if (string? $l)
+           (let ([len (string-length $l)])
+             (build-string len
+                           (lambda (idx) (string-ref $l (- len (add1 idx))))))
+           (.rev-append $l '())) ;}.
+:=! head $args -> (; (lambda (c) (.head c $args)) ;).
+:=! tail $args -> (; (lambda (c) (.tail c $args)) ;).
+
+# files
+:=! load[$file] -> (; (lambda (c) (.load c $file)))) ;).
+:=! exists[$file] -> (; (.app-return file-exists? $file) ;).
+
+# time
+:=! now[] -> {; (current-milliseconds) ;}.
+:=! today[] ->
+    {; (let ([now (current-milliseconds)])
+            (* (quotient now 86400000) 86400000)) ;}.
+:=! days[$n] -> $n * 86400000.
+:=! hours[$n] -> $n * 3600000.
+:=! minutes[$n] -> $n * 60000.
+:=! seconds[$n] -> $n * 1000.
+:=! days_in[$n] -> $n / 86400000.
+:=! hours_in[$n] -> $n / 3600000.
+:=! minutes_in[$n] -> $n / 60000.
+:=! seconds_in[$n] -> $n / 1000.
+
+:=! length $args -> (; (lambda (c) (.length c $args)) ;).
+:=! cd $args -> (; (lambda (c) (.cd c $args)) ;).
+:=! racket $args -> (; (lambda (c) (.racket c $args)) ;).
+:=! racketpred $args -> (; (lambda (c) (.racket-pred c $args)) ;).
+
+# debugging
+:=! spy $names -> {; (.spy $names) ;}.
+:=! nospy $names -> {; (.nospy $names) ;}.
+:=! nospyall[] -> {; (.nospyall) ;}.
+:=! debug[] -> {; (.debug) ;}.
+:=! nodebug[] -> {; (.nodebug) ;}.
+:=! trace[] -> {; (.trace) ;}.
+:=! notrace[] -> {; (.notrace) ;}.
+:=! leash $ports -> {; (.leash $ports) ;}.
+
+# type checking
+:=! string[$x] -> (; (.app-return string? $x) ;).
+:=! number[$x] -> (; (.app-return number? $x) ;).
+:=! integer[$x] -> (; (.app-return (lambda (val) (and (number? val)
+                                                      (exact? val))) $x) ;).
+:=! proc[$x] -> (; (.app-return procedure? $x) ;).
+:=! real[$x] ->
+    (; (.app-return (lambda (n) (and (number? n) (inexact? n) (real? n)))
+                                $x) ;).
+
+# type conversion
+:=! to_number[$x] ->
+     case [$x] of
+        >~[$'(?<$num>[[:digit:]/.]*)[i]'] ->
+           (; (lambda (c)
+                 (unless (equal? $num "")
+                    (let ([num (string->number $num)])
+                        (and num (c (* num 0+1i)))))) ;)
+        >~[_] when (; (lambda (c) (and (number? $x) (c $x))) ;) -> $x
+        >~[_] -> (; (lambda (c)
+                       (let ([num (and (string? $x) (string->number $x))])
+                          (and num (c num)))) ;)
+     end.
+:=! int[$ch] ->
+    (; (lambda (c)
+         (without-errors c (lambda () (char->integer $ch)) #f)) ;).
+
+:=! char[$int] ->
+    (; (lambda (c)
+         (without-errors c (lambda () (integer->char $int)) #f)) ;).
+
+# numeric ops
+:=! floor[$n] -> {; (floor $n) ;}.
+:=! ceiling[$n] -> {; (ceiling $n) ;}.
+
+# sizes of data structures
+:=! size[$hash=(&[...])] -> {; (hash-count $hash) ;}.
+:=! size[$set=(&{...})] -> {; (set-count $set) ;}.
+:=! size[$tuple=((...))] -> {; (vector-length $tuple) ;}.
+:=! size[$list=([...])] -> {; (.list-length $list) ;}.
+
+:=! pwd[] ->
+    {; (let ([dir (path->string (current-directory))])
+         (if (equal? dir "/")
+             dir
+             (string-trim dir "/" #:left? #f))) ;}.
+
+:=! getenv[$var] ->
+    (; (lambda (c) (let ([val (getenv $var)]) (and val (c val)))) ;).
+:=! prompt[] ->
+    `(([pwd[], (passwd[])[login_name]] ~> [$pwd, $login] in
+         $"/home/$login/(?<tail>.*)"[$pwd] in
+              if getenv[USER] == $login
+              then "~/$[%[tail]]"
+              else "~$login/$[%[tail]]"
+              fi) ||
+      pwd[]) ~> $dir in "$dir> ".
+:=! compile[$infile] -> {; ((.gosh-compiler) $infile) ;}.
+:=! chdir[_] -> ok.
+:=! permutation[$l] -> ^{; (permutations (mlist->list $l)) ;}.
+:=! random[$n] -> {; (random $n) ;}.
+:=! printf $args -> {; (mapply printf $args) ;}.
+:=! pp[$item] -> {; (let ([inf (/ 1.0 0.0)]) (parameterize [(.print-length inf) (.print-depth inf)] (.gosh-print $item) (newline))) ;}.
+:=! max $args -> {; (mapply max $args) ;}.
+:=! time[$fun, $args] ->
+    {; (call-with-values
+         (lambda ()
+            (time-apply
+              (lambda ()
+                (call/ec (lambda (ret)
+                            ($fun ret $args))))
+              '()))
+         (lambda (res-list cpu real gc)
+            (hash 'result (car res-list)
+                  'cpu cpu 'real real 'gc gc))) ;}.
+:=! time[$fun] -> time[$fun, []].
+:=! show[$fun] -> (; (lambda (c) (.print-defs $fun) (c $fun)) ;).
+:=! show[] -> (; (lambda (c) (.print-all-defs) (c 'ok)) ;).
+
+# strings
+:=! is_string[$s] -> (; (lambda (c) (and (string? $s) (c $s))) ;).
+:=! chop[$s] when is_string[$s] ->
+    (; (lambda (c)
+          (and (not (eqv? $s ""))
+               (c (mlist (string-ref $s 0) (substring $s 1))))) ;).
+:=! substring[$s, $start, $end] -> {; (substring $s $start $end) ;}.
+:=! join[$strs, $sep] ->
+    case [$strs] of
+        =![[]] -> ''
+        =![[$h . $t]] -> "@"($h || ^$t in ($sep || %))
+    end.
+
+:=! passwd[] ->
+    cat["/etc/passwd"] ~>
+     $'(?<$login_name>[^:]*):(?<$passwd>[^:]*):(?<$user_id>[^:]*):(?<$group_id>[^:]*):(?<$user_name>[^:]*):(?<$home_directory>[^:]*):(?<$shell>[^:]*)'.
+:=! fstab[] ->
+   cat["/etc/fstab"] ~>
+   $'[[:blank:]]*(?<$fs_spec>[^[#[:blank:]][^[:blank:]]*)[[:blank:]]+(?<$fs_file>[^[:blank:]]*)[[:blank:]]+(?<$fs_vfstype>[^[:blank:]]*)[[:blank:]]+(?<$fs_mntops>[^[:blank:]]*)[[:blank:]]+(?<$fs_freq>[^[:blank:]]*)[[:blank:]]+(?<$fs_passno>[^[:blank:]]*)[[:blank:]]*'.
+:=! modtime[$f] ->
+    (; (lambda (c)
+         (without-errors c
+                         (lambda () (file-or-directory-modify-seconds $f))
+                         #f)) ;).
+:=! isdir[$f] -> (; (lambda (c) (and (directory-exists? $f) (c $f))) ;).
+:=! map[_, []] -> [].
+:=! map[$f, [$x . $rest]] -> [$f[$x] . map[$f, $rest]].
+:=! zip $lists -> map[{head}, $lists] || zip(map[{tail}, $lists]).
+
+:=! nth[$n, [_ . $t]] -> nth[$n - 1, $t].
+:=! nth[0, [$h . _]] -> $h.
+
+:=! take[$n, [$h . $t]] ->
+    take[$n - 1, $t] ~> ($taken, $rest) in ([$h . $taken], $rest).
+:=! take[0, $l] -> ([], $l).
+
+:=! foldr[$fun, $list, $initval] ->
+    if $list == []
+    then $initval
+    else $fun[head[$list], foldr[$fun, tail[$list], $initval]]
+    fi.
+
+:=! foldl[$fun, $val, $list] ->
+    if $list == []
+    then $val
+    else foldl[$fun, $fun[$val, head[$list]], tail[$list]]
+    fi.
+
+:=! regexp[$string] -> {; (if (gregexp? $string) $string (gre $string)) ;}.
+:=! unit_test[] -> ^[].
+:=! test $tags ->
+    case $tags of
+        >~[] -> printf["Running all tests~%~%"]
+        >~[$tag] -> printf["Running tests matching: ~s~%~%", $tag]
+        >~[_ . _] -> printf["Running tests matching one of: ~s~%~%", $tags]
+    end &&
+    loop runtests with $tests <~ @unit_test[], $pass <~ 0, $fail <~ 0 ->
+        case $tests of
+            >~[] ->
+                printf["~%Total tests: ~s, Pass: ~s, Fail: ~s~%",
+                       $pass + $fail, $pass, $fail]
+            >~[[$str, $fun . $pats] . $rest] ->
+                if $pats == [] || `((^$pats)[^$tags]) then
+                    (if $fun[] then [PASS, 1, 0] else [FAIL, 0, 1] fi)
+                    ~> [$result, $pass_inc, $fail_inc] in
+                        printf["~s: (~a)~%", $str, $result] &&
+                        runtests[$rest, $pass + $pass_inc, $fail + $fail_inc]
+                else
+                    runtests[$rest, $pass, $fail]
+                fi
+        end
+    end.
+
+# database
+:=! connect[] ->
+    {; (virtual-connection
+         (connection-pool
+           (thunk (sqlite3-connect
+                   #:database 'memory #:use-place #t #:mode 'create)))) ;}.
+:=! connect[$db] ->
+    {; (virtual-connection
+         (connection-pool
+           (thunk (sqlite3-connect
+                   #:database $db #:use-place #t #:mode 'create)))) ;}.
+:=! query[$conn, $qstr . $params] ->
+    {; (mapply query-rows (mcons $conn (mcons $qstr (.as-mlist $params)))) ;}.
+:=! exec[$conn, $str . $params] ->
+    {; (mapply query-exec (mcons $conn (mcons $str (.as-mlist $params)))) ;}.
+:=! gqe[$str . $params] ->
+    {; (mapply query-exec (mcons .gosh-db (mcons $str (.as-mlist $params)))) ;}.
+:=! gqr[$str . $params] ->
+    {; (mapply query-rows (mcons .gosh-db (mcons $str (.as-mlist $params)))) ;}.
+:=! gqrow[$str . $params] ->
+    {; (mapply query-row (mcons .gosh-db (mcons $str (.as-mlist $params)))) ;}.
+:=! gqv[$str . $params] ->
+    {; (mapply query-value (mcons .gosh-db (mcons $str (.as-mlist $params)))) ;}.

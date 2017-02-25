@@ -1,0 +1,32 @@
+maxd=$:[9]
+maxi=$:[$maxd - 1]
+
+:=! ir[] -> 0 to $maxi.
+:=! rb[$board] -> &[@]([ir[], ir[]] in (% => $board(%))).
+:=! wb[$map] -> @((ir[]) ~> $x in @(ir[] ~> $y in $map[[$x , $y]])).
+:=! neighbor[[$x, $y]] ->
+    [$x, ir[] != $y] || [ir[] != $x, $y] ||
+    [$x - ($x rem 3), $y - ($y rem 3)] ~> [$xbase, $ybase] in
+        [($xbase to $xbase + 2) when % != $x,
+         ($ybase to $ybase + 2) when % != $y].
+
+:=! solve[$map, $loc=([$x, $y])] ->
+    if $x + $y == $maxi + $maxd then wb[$map]
+    elif $x > $maxi then solve[$map, [0, $y + 1]]
+    elif $map[$loc] != 0 then solve[$map, [$x + 1, $y]]
+    else 1 to $maxd in (!($map[neighbor[$loc]] == %) &&
+                          solve[$map += ($loc => %), [$x + 1, $y]])
+    fi.
+:=! solve[$board] -> &{@}solve[rb[$board], [0, 0]].
+
+:=! testboard[] ->
+    [[1,0,0,4,0,8,0,0,3],
+     [0,2,0,0,1,0,0,0,0],
+     [6,0,7,0,0,0,1,0,0],
+     [0,6,9,0,0,0,0,0,0],
+     [0,0,0,5,0,9,0,0,0],
+     [0,0,0,6,0,0,0,4,0],
+     [0,0,3,0,0,0,6,0,2],
+     [0,0,0,0,4,0,0,5,0],
+     [7,0,0,9,0,1,0,0,4]].
+

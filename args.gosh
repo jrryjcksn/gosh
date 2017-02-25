@@ -1,0 +1,81 @@
+# Process command line arguments.
+#
+# Support all the usual forms:
+#   -x
+#   -x 5
+#   --long-version-of-x
+#   --long-version-of-x=20
+#   -xyzf foo <==> -x -y -z -f foo
+#
+# process_args[<arg_def_map>, <arg_list>]
+# arg_def_map ::= &[params=><param_list>, disjoint=>[<group_spec>, ...]]
+# param_list ::= [<param_name>=><param_spec>, ...]
+# param_name ::= STR
+# param_spec ::= &[formats=>[<param_format>, ...], required=><choice>,
+#                  value=><value_spec>]
+# param_format ::= $"[-][[:alpha:]]" | $"[--][[:word:]]+([=])?"
+# choice ::= yes | no
+# value_spec ::= none | any | PROC[_]
+# group_spec ::= &{<param_name>, ...}
+# param_value ::= none | [value, VAL]
+
+# process_args[<arg_def_map>, [<string>, ...]] ->
+#    &[params=>&[<param_name>=><param_val>, ...], args=>[<string>, ...]]
+#
+
+:=! process_args[$arg_def_map, $arglist] ->
+    case [$arg_def_map] of
+        >~[&[params=>$params, disjoint=>$groups]] ->
+            process_args_impl[$params, group_map[$groups], $arglist, &[]]
+        >~[&[params=>$params]] ->
+            process_args_impl[$params, &[], $arglist, &[]]
+    end.
+
+:=! process_args_impl[[], _, $args, $params] ->
+    &[params=>$params, args=>$args].
+:=! process_args_impl[[($pname=>$pspec) . $prest], $groups, $args, $opars] ->
+    process_arg[$pname, $pspec, $prest, $groups, $args, $opars].
+
+:=! process_arg[$pname, $pspec, $prest, $groups, $args, $opars] ->
+    &[@]((formats=>`($pspec[formats] || ["--$pname"])) ||
+         (value=>`($pspec[value] || none))) ~> $spec in
+#        =![&[formats=>$f, required=>$r, value=>$v]]
+        if $spec[value] != none then
+            `remove_two[^$spec[formats], $args] ~> [$pval, $outargs] in
+                    process_args_impl[$prest, $groups, $outargs,
+                                      $opars += ($pname=>$pval)]
+        else
+            `remove[^$spec[formats], $args] ~> $outargs in
+                    process_args_impl[$prest, $groups, $outargs,
+                                      $opars += ($pname=>$pname)]
+        fi.
+
+:=! remove[$x, [$h . $t]] -> [$h . remove[$x, $t]].
+:=! remove[$x, [$h . $t]] when $x == $h -> $t.
+
+:=! remove_two[$x, [$h . $t]] ->
+    remove_two[$x, $t] ~> [$val, $tail] in [$val, [$h . $tail]].
+:=! remove_two[$x, [$par, $val . $t]] when $x == $par -> [$val, $t].
+
+:=! group_map[$groups] -> group_map[$groups, $groups].
+
+:=! group_map[$groups, $groups] ->
+    &[@](^^$groups ~> $pname in ($pname=>@((^$groups)[$pname] -= $pname))).
+
+
+:>! unit_test[] -> ^[
+
+    ["Simple Parameter",
+     {process_args[&[params=>[foo=>&[]]], [--foo, bar]] ==
+      &[args=>[bar], params=>&[foo=>foo]]}],
+
+    ["Simple Parameter With Value 1",
+     {process_args[&[params=>[foo=>&[value=>any]]], [--foo, bar]] ==
+      &[args=>[], params=>&[foo=>bar]]}],
+
+    ["Simple Parameter With Value 2",
+     {process_args[&[params=>[foo=>&[value=>any]]], [--foo, bar, baz]] ==
+      &[args=>[baz], params=>&[foo=>bar]]}]
+
+    ] += [args, core].
+

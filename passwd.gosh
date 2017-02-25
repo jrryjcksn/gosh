@@ -1,0 +1,4 @@
+:=! passwd[] ->
+   cat["/etc/passwd"] ~>
+   $"(?<$login_name>[^:]*):(?<$passwd>[^:]*):(?<$user_id>[^:]*):(?<$group_id>[^:]*):(?<$user_name>[^:]*):(?<$home_directory>[^:]*):(?<$shell>[^:]*)".
+

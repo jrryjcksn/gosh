@@ -1,0 +1,9 @@
+
+:=! fizzbuzz[$limit] ->
+    1 to $limit ~> $n in
+    case [$n rem 5, $n rem 3] of
+        >~[0, 0] -> fizzbuzz
+        >~[_, 0] -> fizz
+        >~[0, _] -> buzz
+        >~[_, _] -> $n
+    end.

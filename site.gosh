@@ -1,0 +1,70 @@
+:=! map[$fn, []] -> [].
+:=! map[$fn, [$h . $t]] -> [$fn[$h] . map[$fn, $t]].
+
+:=! compile[] -> map[{compile_stage}, stages["."]].
+
+:=! compile_stage[$stage] -> *compile[^$stage].
+
+:=! src_dir[$dir=("**/src")] -> $dir.
+
+# :>! src_dir[$dir] -> ~"$dir/**/src".
+
+:=! dep[$dir] -> dependencies[$dir] ~> $deps in [$dir, ^$deps].
+
+:=! diff[$x, $y] -> @(^$x ~> $i when !($i == ^$y)).
+
+:=! union[$x, $y] -> @(^diff[$x, $y] || ^$y).
+
+:=! unique[[]] -> [].
+:=! unique[[$h . $t]] ->
+    if $h == ^$t then unique[$t] else [$h . unique[$t]] fi.
+
+:=! dep_tree[$dir] ->
+    ^dependencies[$dir] ~> $dep in ($dep || dep_tree[$dep]).
+
+:=! topsort[[], _] -> [].
+:=! topsort[$vertices=([_ . _]), $edges] ->
+    @(^$vertices ~> $v when !($v == (^$edges)[1])) ~> $nodeps in
+        [$nodeps . topsort[$vertices -= $nodeps,
+                           @(^$edges ~> $e when !(^$nodeps == $e[2]))]].
+
+:=! stages[$dir] ->
+    @src_dir[$dir] ~> $srcs in
+        @dep_tree[^$srcs] ~> $deps in
+            unique[union[$srcs, $deps]] ~> $dirs in
+                topsort[$dirs, @dep[^$dirs]].
+
+:=! build[$target] ->
+    `((src_file[$target] ~> $source in
+        (modtime[$source] <= modtime[$target] || compile[$source, $target])) ||
+      (components[$target] ~> $components in
+        map[{build}, $components] && link[$target])).
+
+:=! components[$target] -> (@object_file[src_file_in[src_dir[$target]]]) != [].
+
+:=! src_file_in[$target] when isdir[$target] ->
+    ~"$[src_dir[$target]]/*.$[src_extension_in[$target]]".
+
+:=! object_file[$f] -> $f ~> $"(?<$dname>.+)/(?<$fname>[^/]+)\.(?<$ext>.+)" in
+    "$(object_dir[$dname])/$fname.$(obj_extension[$ext])".
+
+:=! src_file[$f] -> $f ~> $"(?<$dname>.+)/(?<$fname>[^/]+)\.(?<$ext>.+)" in
+    ~"$(src_dir[$dname])/$fname.$(src_extension[$ext])".
+
+:=! src_dir[$target] when !racketpred['file-exists?', $target] -> ".".
+
+:=! object_dir[$target] -> src_dir[$target].
+
+:=! src_extension_in[_] -> c || ml || erl || java || rkt.
+
+:=! obj_extension[c] -> o.
+
+:=! src_extension[o] -> c.
+
+:=! link_command[$target] -> {gcc[-o, $target . $*]}.
+
+:=! compile_command[$source, _] -> {`(gcc[-c . $*] || ok)}.
+
+:=! link[$target] -> (link_command[$target])(components[$target]).
+
+:=! compile[$source, $target] -> (compile_command[$source, $target])[$source].

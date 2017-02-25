@@ -1,0 +1,40 @@
+:=! rand-list[$n] -> @(random[$n]::(random[$n] while %? < $n)).
+
+:=! quick $l -> @qs($l).
+
+:=! qs[$pivot . $list] ->
+    qs(@($pivot >= ^$list)) || $pivot || qs(@($pivot < ^$list)).
+
+
+:=! split $l -> split3($l, [], []).
+
+:=! split3([], $left, $right) -> [$left, $right].
+:=! split3([$h . $t], $left, $right) -> split3($t, [$h . $right], $left).
+
+:=! merge([], $r, _) -> $r.
+:=! merge($l, [], _) -> $l.
+:=! merge($l=([$l1 . $lrest]), [$r1 . $rrest], $comp) ->
+    [$r1 . merge($l, $rrest, $comp)].
+:=! merge([$l1 . $lrest], $r=([$r1 . $rrest]), $comp) when $comp[$l1, $r1] ->
+    [$l1 . merge($lrest, $r, $comp)].
+
+:=! msort $list -> msort($list, {<}).
+:=! msort($list, $c) ->
+    split($list) ~> [$l, $r] in merge(msort($l, $c), msort($r, $c), $c).
+:=! msort([$item], _) -> [$item].
+:=! msort([], _) -> [].
+
+:=! umerge([], $r, _) -> $r.
+:=! umerge($l, [], _) -> $l.
+:=! umerge($l=([$l1 . _]), [$r1 . $rrest], $comp) ->
+    [$r1 . umerge($l, $rrest, $comp)].
+:=! umerge([$l1 . $lrest], $r=([$r1 . _]), $comp) when $comp[$l1, $r1] ->
+    [$l1 . umerge($lrest, $r, $comp)].
+:=! umerge([$l1 . $lrest], $r=([$r1 . _]), $comp) when $l1 == $r1 ->
+    umerge($lrest, $r, $comp).
+
+:=! usort $list -> usort($list, {<}).
+:=! usort($list, $c) ->
+    split($list) ~> [$l, $r] in umerge(usort($l, $c), usort($r, $c), $c).
+:=! usort([$item], _) -> [$item].
+:=! usort([], _) -> [].

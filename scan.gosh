@@ -1,0 +1,62 @@
+letters=$:[&{@}(?a to ?z || ?A to ?Z)]
+digits=$:[&{@}(?0 to ?9)]
+
+:=! upto[$set, $s, $i] ->
+    length[$s] ~> $slen in
+    loop uploop with $idx <~ $i ->
+        $idx < $slen &&
+        `(($set[$s[$idx]] && [$idx, $s, $i]) || uploop[$idx + 1])
+    end.
+    # (< (lambda (c)
+    #      (let ([$slen (string-length $s)])
+    #        (when (< $i $slen)
+    #          (let loop ([$idx $i])
+    #            (cond [(>= $idx $slen) #f]
+    #                  [(set-member? $set (string-ref $s $idx))
+    #                   (c (mlist $idx $s $i))]
+    #                  [else (loop (+ $idx 1))]))))) >).
+
+:=! many[$set, $s, $i] ->
+    $set[$s[$i]] &&
+    loop manyloop with $idx <~ $i + 1 ->
+        if !$set[$s[$idx]] then [$idx, $s, $i] else manyloop[$idx + 1] fi
+    end.
+    # (< (lambda (c)
+    #      (let ([$slen (string-length $s)])
+    #        (when (and (< $i $slen) (set-member? $set (string-ref $s $i)))
+    #           (let loop ([$idx (+ $i 1)])
+    #              (if (or (>= $idx $slen)
+    #                      (not (set-member? $set (string-ref $s $idx))))
+    #                  (c (mlist $idx $s $i))
+    #                  (loop (+ $idx 1))))))) >).
+
+:=! tab[$pos, $s, $i] ->
+    $pos >= $i && $pos <= length[$s] && [substring[$s, $i, $pos], $s, $pos].
+
+:=! move[$off, $s, $i] -> tab[$i + $off, $s, $i].
+
+:=! sub[$str, $pos, $s, $i] ->
+    $pos >= $i && length[$s] ~> $slen in
+    $pos <= $slen &&
+    [substring[$s, $i, $pos],
+     "@"(substring[$s, 0, $i] || $str || substring[$s, $pos, $slen]),
+     $i + length[$str]].
+
+:=! scan[$s, $f] -> $f[$s, 0] ~> [$val, $str, $pos] in
+    &[value=>$val, string=>$str, position=>$pos].
+
+:=! sscan[$s, $f] -> head[$f[$s, 0]].
+
+:=! words $* ->
+    `tab(upto[$letters . $*]) &&> tab(many[$letters . %]) ||> words(%).
+
+:=! count_words[$s, $m] ->
+    &[@]($m ||
+         sscan[$s, {words}] ~> $word in
+         ($word=>(`((&[%])[$word] || 0) + 1))).
+
+:=! wc[$stream, $map] ->
+    count_words[head[$stream], $map] in wc[tail[$stream], %].
+#:=! wc[[], $map] -> $map.
+
+:=! wc[$file] when is_string[$file] -> `wc[@(<. $file), &[]].

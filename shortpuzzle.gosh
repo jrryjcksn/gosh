@@ -1,0 +1,30 @@
+:=! time[$toy] -> &[Buzz=>5, Woody=>10, Rex=>20, Hamm=>25][$toy].
+
+:=! max_t[$toys] -> max(@time[^$toys]).
+
+:=! start_state[] -> &[lt=>&{}, rt=>&{Buzz, Woody, Rex, Hamm}, t=>0, fl=>right].
+
+:=! take_toy[$toys] -> ^$toys in [%, $toys -= [%]].
+
+:=! take_toys[$toys] ->
+    take_toy[$toys] ~> [$toy, $rest] in
+        take_toy[$rest] ~> [$toy2, $rest2]
+        when (< (lambda (c) (and (string<? (~a $toy) (~a $toy2)) (c 'ok))) >) in
+            [[$toy, $toy2], $rest2].
+
+:=! new_state[&[lt=>$l, rt=>$r, t=>$t, fl=>left]] ->
+    take_toy[$l] ~> [$toy, $newl] in
+        &[lt=>$newl, rt=>$r += [$toy], t=>$t + time[$toy], fl=>right].
+
+:=! new_state[&[lt=>$l, rt=>$r, t=>$t, fl=>right]] ->
+    take_toys[$r] ~> [$toys, $newr] in
+       &[lt=>$l += $toys, rt=>$newr, t=>$t + max_t[$toys], fl=>left].
+
+:=! move[$state, $slist] ->
+    new_state[$state] ~> $new when $new[t] <= 60 in
+        $new -= t ~> $scrubbed when !($scrubbed == (^$slist -= t)) in
+            move[$new, [$new . $slist]].
+
+:=! move[&[rt=>$rt, t=>$t, fl=>left], $slist] when *^$rt == 0 && $t <= 60 ->
+    reverse[$slist].
+

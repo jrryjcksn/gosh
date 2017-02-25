@@ -1,0 +1,98 @@
+letters=$:[&{@}(?a to ?z || ?A to ?Z)]
+digits=$:[&{@}(?0 to ?9)]
+#chars=$:[&{@}(char[0] to char[256])]
+chars=$:[&{@}(char[30] to char[128])]
+
+:=! pos[$p, $s, $i] -> $p == $i.
+
+:=! upto[$set, $s, $i] ->
+     (; (lambda (c)
+          (and (and (set? $set) (string? $s) (exact-integer? $i))
+            (let ([$slen (string-length $s)])
+              (and (; $i $slen)
+                (let loop ([$idx $i])
+                  (cond [(>= $idx $slen) #f]
+                        [(set-member? $set (string-ref $s $idx))
+                         (c (mlist $idx $s $i))
+                         (loop (+ $idx 1))]
+                        [else (loop (+ $idx 1))])))))) ;).
+
+:=! many[$set, $s, $i] ->
+    (; (lambda (c)
+         (and (and (set? $set) (string? $s) (exact-integer? $i))
+            (let ([$slen (string-length $s)])
+              (and (; $i $slen) (set-member? $set (string-ref $s $i))
+                   (let loop ([$idx (+ $i 1)])
+                      (if (or (>= $idx $slen)
+                              (not (set-member? $set (string-ref $s $idx))))
+                          (c (mlist $idx $s $i))
+                          (loop (+ $idx 1)))))))) ;).
+
+:=! skip[$set, $s, $i] ->
+    (; (lambda (c)
+         (and (and (set? $set) (string? $s) (exact-integer? $i))
+            (let ([$slen (string-length $s)])
+              (if (and (; $i $slen) (set-member? $set (string-ref $s $i)))
+                  (let loop ([$idx (+ $i 1)])
+                     (if (or (>= $idx $slen)
+                             (not (set-member? $set (string-ref $s $idx))))
+                         (c (mlist $idx $s $idx))
+                         (loop (+ $idx 1))))
+                  (c (mlist $i $s $i)))))) ;).
+
+:=! any[$set . $args=([$s, $i])] ->
+    (; (lambda (c)
+         (and (set? $set) (string? $s) (exact-integer? $i)
+              (let ([$slen (string-length $s)])
+                (and (; $i $slen) (set-member? $set (string-ref $s $i))
+                     (c (mcons "ok" $args)))))) ;).
+
+:=! tab[$pos, $s, $i] ->
+    (; (lambda (c)
+          (and (exact-integer? $pos) (string? $s) (exact-integer? $i)
+               (>= $pos $i) (;= $pos (string-length $s))
+               (c (mlist (substring $s $i $pos) $s $pos)))) ;).
+
+:=! skip_to[$pos, $s, $i] ->
+    (; (lambda (c)
+          (and (exact-integer? $pos) (string? $s) (exact-integer? $i)
+               (>= $pos $i) (;= $pos (string-length $s))
+               (c (mlist "ok" $s $pos)))) ;).
+
+:=! move[$off, $s, $i] -> tab[$i + $off, $s, $i].
+
+:=! fwd[$off, $s, $i] -> skip_to[$i + $off, $s, $i].
+
+:=! bal[$map . $args=([$str, $idx])] ->
+    $chars -= &{@}((^$map)[0 to 1]) ~> $simple_chars in
+    $chars -= &{@}((^$map)[1]) ~> $close_chars in
+    (fun bal_aux[$s, $i] ->
+        length[$s] ~> $slen in
+        $i <= $slen - 1 && $i ~> $start in
+        fwd[1 . $*] &&>
+        skip[$simple_chars . %] ~> [_ . $current] in
+        `({bal_aux($current) &&> skip[$simple_chars . %] &&> $0(%) ||
+           [ok . $current]}(%)) &&>
+        any[$close_chars . %] &&>
+        fwd[1 . %] &&> [%[1] . %]
+     end)($args).
+
+:=! sub[$str, $pos, $s, $i] ->
+    $pos >= $i && length[$s] ~> $slen in
+    $pos <= $slen &&
+    [substring[$s, $i, $pos],
+     "@"(substring[$s, 0, $i] || $str || substring[$s, $pos, $slen]),
+     $i + length[$str]].
+
+:=! scan[$s, $f] -> $f[$s, 0] ~> [$val, $str, $pos] in
+    &[value=>$val, string=>$str, position=>$pos].
+
+:=! sscan[$s, $f] -> head[$f[$s, 0]].
+
+:=! words $* ->
+    `skip_to(upto[$letters . $*]) &&> tab(many[$letters . %]) ||> words(%).
+
+:=! count_words[$m, $s] ->
+    &[@]($m || sscan[$s, {words}] in `(%=>(((&[%])[%]) || 0) + 1)).
+
+:=! wc[$file] when is_string[$file] -> fold<{count_words}, &[], (<. $file)>.
