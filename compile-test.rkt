@@ -315,8 +315,8 @@
 (ensure '(6 28) '("=! gorp[] -> 6" ">! gorp[] |> $x -> ^$x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(28) '("=! gorp[] -> 6" "<? gorp[] |> $x -> ^$x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(6) '("=! gorp[] -> 6" ">? gorp[] |> $x -> ^% * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
-(ensure-shell '("checkpoint")
-              "cat $(ls -df /home/jerry/.hg/hgrc /home/jerry/.hg/last-message.txt) | grep checkpoint")
+;; (ensure-shell '("checkpoint")
+;;               "cat $(ls -df /home/jerry/.hg/hgrc /home/jerry/.hg/last-message.txt) | grep checkpoint")
 ;;                 ;; "result=$(cat /tmp/echotest)"
 ;;                 ;; "rm /tmp/echotest"
 ;;                 ;; "echo $result"))
@@ -644,7 +644,7 @@
 (ensure-shell `("foo")
               '(":=! noflameout[] -> foo."
                 "noflameout || echo that was a test"))
-(ensure-shell '("1") '("grep xxx /tmp" "echo $?"))
+(ensure-shell '("2") '("grep xxx /tmp" "echo $?"))
 (ensure-shell '("0") '("echo xxx" "echo $?"))
 (ensure-shell '("x") '("echo foo | grep bar || echo x"))
 (ensure-shell '() '("echo foo | grep bar && echo x"))

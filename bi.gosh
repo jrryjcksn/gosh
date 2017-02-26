@@ -16,6 +16,13 @@
 :=! error[$code, $msg] when integer[$code] -> error[$code, '~a~n', $msg].
 :=! error[$msg] -> error[1, $msg].
 
+:=! history[] ->
+    {; (let loop ([hist (reverse (.history))] [index 1])
+          (if (empty? hist)
+              (void)
+              (begin (printf "~s ~a\n" index (first hist))
+                     (loop (rest hist) (add1 index))))) ;}.
+
 # # flush the cache of already loaded modules (when something about the
 # # runtime changes).
 # :=! flush_module_cache[] ->

@@ -1,0 +1,5 @@
+:import base except [foo=>bar].
+
+:>! bar[] -> 28.
+
+:>! color[] -> green.

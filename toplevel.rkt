@@ -17,6 +17,7 @@
        (parameterize* [(print-as-expression #f)
                        (.loading #f)
                        (local-custodian #f)
+                       (.history '())
                        (uncaught-exception-handler
                         (lambda (_)
                           (fprintf (current-error-port) "user break~%")
@@ -619,7 +620,7 @@
                exported-sym-list)])
         (write `(require (file "/home/jerry/gosh/runtime.rkt")
                          (file "/home/jerry/gosh/toplevel.rkt")
-                         (file "/home/jerry/gosh/pcomb.rkt")
+;;                         (file "/home/jerry/gosh/pcomb.rkt")
                          ,@(if (equal? (path->string (module-being-compiled))
                                        "/home/jerry/gosh/bi.gosh")
                                '(db)
@@ -729,6 +730,9 @@
                (current-directory .pwd)
                (current-exp-string exp)]
               (local-custodian cust)
+              (.history (if (regexp-match #rx"\\s*history\\s*" exp)
+                            (.history)
+                            (cons exp (.history))))
               (thread
                (lambda ()
                  (with-handlers
