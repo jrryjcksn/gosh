@@ -3,11 +3,14 @@
          "parse.rkt" "compile.rkt" "runtime.rkt"
          racket/async-channel readline/readline racket/trace
          (for-syntax "runtime.rkt") (for-syntax "compile.rkt")
-         compiler/cm)
+         compiler/cm  parser-tools/lex
+         (prefix-in : parser-tools/lex-sre))
 
 (provide (all-defined-out))
 
 (define local-custodian (make-parameter #f))
+
+(define .history '())
 
 (define (repl)
   (.set-up-gosh-db)
@@ -17,7 +20,6 @@
        (parameterize* [(print-as-expression #f)
                        (.loading #f)
                        (local-custodian #f)
-                       (.history '())
                        (uncaught-exception-handler
                         (lambda (_)
                           (fprintf (current-error-port) "user break~%")
@@ -709,6 +711,52 @@
 ;;                                 (cons results final-results)
 ;;                                 final-results)))))])))))
 
+(define histlex
+  (lexer [(:* (complement (:: (:* (:~ "!")) "!" (complement " ")))) lexeme]
+         [(:: "!" (:or "!"
+                       (:: (:? "-") (:* (:/ "0" "9")))
+                       (:: "{" (:? "-") (:* (:/ "0" "9")) "}")
+                       (:: "?" (:* (:~ " " "\n" "\t" "\r" "?")))
+                       (:: (:~ "{") (:* (:~ " " "\n" "\t" "\r" "?")))
+                       (:: "{" (:? "?")
+                           (:* (:~ " " "\n" "\t" "\r" "?" "}")) "}")))
+          lexeme]))
+
+(define (hist-chunks str)
+  (let ([port (open-input-string str)])
+    (let loop ([chunk (histlex port)] [chunks '()])
+      (if (eq? chunk 'eof)
+          (reverse chunks)
+          (loop (histlex port) (cons chunk chunks))))))
+
+(define (hist-expand str)
+  (let ([chunks (hist-chunks str)])
+    (let loop ([c chunks] [rep-chunks '()])
+      (if (empty? c)
+          (apply string-append (reverse rep-chunks))
+          (let ([hchunk (hist-replace (first c))])
+            (and hchunk (loop (rest c) (cons hchunk rep-chunks))))))))
+
+(define (hist-replace-num hist numstr pos)
+  (let ([num (string->number numstr)])
+    (let loop ([h hist] [index (sub1 num)])
+      (cond [(null? h)
+             (top-level-eprint (format "No such event: ~s~%"
+                                       (if pos num (- (length hist) num))))
+             ""]
+             [(<= index 0) (first h)]
+             [else (loop (rest h) (sub1 index))]))))
+
+(define (hist-replace str)
+    (let ([hist .history])
+    (match str
+           ["!!" (if (null? hist) "!!" (first hist))]
+           [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
+            (hist-replace-num hist numstr #f)]
+           [(pregexp #px"^!([0-9]+)$" (list _ numstr))
+            (hist-replace-num (reverse hist) numstr #t)]
+           [_ str])))
+
 (define (cont-for-read-state read-state)
   (if (eq? read-state 'colon)
       '.colon-cont
@@ -730,9 +778,12 @@
                (current-directory .pwd)
                (current-exp-string exp)]
               (local-custodian cust)
-              (.history (if (regexp-match #rx"\\s*history\\s*" exp)
-                            (.history)
-                            (cons exp (.history))))
+              (set! exp (hist-expand exp))
+              (set! .history
+                    (if (or (equal? exp "")
+                            (regexp-match #rx"\\s*history\\s*" exp))
+                        .history
+                        (cons exp .history)))
               (thread
                (lambda ()
                  (with-handlers
@@ -762,27 +813,27 @@
                                       (async-channel-put .toplevel-chan
                                                          .channel-empty))
                         (async-channel-put .toplevel-chan
-                                           .channel-empty))))))
-              (let loop ([val (async-channel-get .toplevel-chan)])
-                (when (not (eq? val .channel-empty))
-                      (if (and (eq? token-state 'default) (string? val))
-                          (fprintf out "~a" val)
-                          (.gosh-fprint out val))
-                      (cond [(and (eq? token-state 'colon) (not (.loading)))
-                             (printf "? ")
-                             (let ([input-val (read-line in)])
-                               (semaphore-post .toplevel-semaphore)
-                               (if (equal? input-val ";")
-                                   (loop (async-channel-get .toplevel-chan))
-                                   (reset-toplevel-channel!)))]
-                            [#t
-                             (newline out)
-                             (semaphore-post .toplevel-semaphore)
-                             (loop (async-channel-get .toplevel-chan))])))
-              (unless is-assignment?
-                      (custodian-shutdown-all cust)
-                      (local-custodian #f))))
-           (repl-aux new-read-state in out)])))
+                                           .channel-empty)))))))
+             (let loop ([val (async-channel-get .toplevel-chan)])
+               (when (not (eq? val .channel-empty))
+                     (if (and (eq? token-state 'default) (string? val))
+                         (fprintf out "~a" val)
+                         (.gosh-fprint out val))
+                     (cond [(and (eq? token-state 'colon) (not (.loading)))
+                            (printf "? ")
+                            (let ([input-val (read-line in)])
+                              (semaphore-post .toplevel-semaphore)
+                              (if (equal? input-val ";")
+                                  (loop (async-channel-get .toplevel-chan))
+                                  (reset-toplevel-channel!)))]
+                           [#t
+                            (newline out)
+                            (semaphore-post .toplevel-semaphore)
+                            (loop (async-channel-get .toplevel-chan))])))
+             (unless is-assignment?
+                     (custodian-shutdown-all cust)
+                     (local-custodian #f)))
+          (repl-aux new-read-state in out)])))
 
 (define (gosh-read port read-state)
   (case read-state

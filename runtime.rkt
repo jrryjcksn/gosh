@@ -17,7 +17,6 @@
 (define .cmd-success (make-parameter #t))
 (define .throw-to-or. (make-parameter identity))
 (define .local-vars (make-parameter #f))
-(define .history (make-parameter '()))
 
 (define (.set-empty? x) (and (set? x) (set-empty? x)))
 (define (.hash-empty? x) (and (hash? x) (hash-empty? x)))

@@ -17,7 +17,7 @@
 :=! error[$msg] -> error[1, $msg].
 
 :=! history[] ->
-    {; (let loop ([hist (reverse (.history))] [index 1])
+    {; (let loop ([hist (reverse .history)] [index 1])
           (if (empty? hist)
               (void)
               (begin (printf "~s ~a\n" index (first hist))
