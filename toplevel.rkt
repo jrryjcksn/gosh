@@ -747,6 +747,24 @@
              [(<= index 0) (first h)]
              [else (loop (rest h) (sub1 index))]))))
 
+(define (hist-replace-prefix hist str)
+  (let loop ([h hist])
+    (cond [(empty? h)
+           (top-level-eprint (format "No such event: ~s~%" str))
+           ""]
+          [(string-prefix? (first h) str)
+           (first h)]
+          [else (loop (rest h))])))
+
+(define (hist-replace-contains hist str)
+  (let loop ([h hist])
+    (cond [(empty? h)
+           (top-level-eprint (format "No such event: ~s~%" str))
+           ""]
+          [(string-contains? (first h) str)
+           (first h)]
+          [else (loop (rest h))])))
+
 (define (hist-replace str)
     (let ([hist .history])
     (match str
@@ -755,6 +773,10 @@
             (hist-replace-num hist numstr #f)]
            [(pregexp #px"^!([0-9]+)$" (list _ numstr))
             (hist-replace-num (reverse hist) numstr #t)]
+           [(pregexp #px"^[!][?][^{][^ \n\t\r?]*$" (list _))
+            (hist-replace-contains hist (substring str 2))]
+           [(pregexp #px"^[!][^{][^ \n\t\r?]*$" (list _))
+            (hist-replace-prefix hist (substring str 1))]
            [_ str])))
 
 (define (cont-for-read-state read-state)
