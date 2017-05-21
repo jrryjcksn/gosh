@@ -11,6 +11,12 @@
 ;;          extract-regexp-field-names)
 
 (struct var (name [seen #:mutable]) #:transparent)
+(struct pos (val pos) #:transparent)
+
+(define (depos x)
+  (match x
+         [(struct pos (val _)) val]
+         [_ x]))
 
 (define current-exp-string (make-parameter ""))
 
@@ -185,41 +191,75 @@
      [(ATOM) $1]
      [(ATOM => ATOM) `(,$1 ,$3)])
     (cmd
-     [(simple-cmd AMPAMP cmd) `(&&. ,$1 ,$3)]
-     [(simple-cmd PIPEPIPE cmd) `(||. ,$1 ,$3)]
+     [(simple-cmd AMPAMP cmd)
+      (pos
+       `(&&. ,(pos-val $1) ,(pos-val $3))
+       (append (pos-pos $1)
+               (cons (list $2-start-pos $2-end-pos)
+                     (pos-pos $3))))]
+     [(simple-cmd PIPEPIPE cmd)
+      (pos `(||. ,(pos-val $1) ,(pos-val $3))
+           (append (pos-pos $1)
+                   (cons (list $2-start-pos $2-end-pos)
+                         (pos-pos $3))))]
      [(simple-cmd) $1])
     (simple-cmd
-     [(cmd-item cmd-items cmd-tail) (process-cmd-chain $1 $2 $3)])
+     [(cmd-item cmd-items cmd-tail)
+      (pos (process-cmd-chain (pos-val $1) (pos-val $2) (pos-val $3))
+           (append (pos-pos $1) (pos-pos $2) (pos-pos $3)))])
     (cmd-item
-     [(ATOM) (process-tilde $1)]
-     [(FUNKYATOM) `(atom ,$1)]
-     [(VAR) $1]
-     [(atomstr) $1]
-     [(cstr) (process-tilde $1)]
+     [(ATOM) (pos (process-tilde $1) (list (list $1-start-pos $1-end-pos)))]
+     [(FUNKYATOM) (pos `(atom ,$1) `((,$1-start-pos ,$1-end-pos)))]
+     [(VAR) (pos $1 (list (list $1-start-pos $1-end-pos)))]
+     [(atomstr) (pos $1 (list (list $1-start-pos (position (sub1 (position-offset $1-end-pos)) 1 (sub1 (position-offset $1-end-pos))))))]
+     [(cstr) (pos $1 (list (list $1-start-pos $1-end-pos)))]
 ;;;     [(LBRACE cmd RBRACE) `(bracecmd ,$2)]
-     [(DOLLAR COLONLPAR exp RPAR) `(parencmd ,$3)]
-     [(DOLLAR COLONLBRACK exp RBRACK) $3]
-     [(DOLLAR COLONLBRACK exp COMMA exp RBRACK) `(in-field ,$3 ,$5)]
-     [(DOLLAR DOTLPAR cmd RPAR) `(parencmd ,$3)]
-     [(DOLLAR DOTLBRACK cmd RBRACK) $3]
-     [(DOLLAR DOTLBRACK cmd COMMA exp RBRACK) `(in-field ,$3 ,$5)]
-     [(DOLLAR LPAR cmd RPAR) `(parencmd ,$3)]
-     [(DOLLAR LBRACK cmd RBRACK) $3]
-     [(DOLLAR LBRACK cmd COMMA exp RBRACK) `(in-field ,$3 ,$5)])
+     [(DOLLAR COLONLPAR exp RPAR)
+      (pos `(parencmd ,$3) `((,$1-start-pos ,$4-end-pos)))]
+     [(DOLLAR COLONLBRACK exp RBRACK)
+      (pos $3 (list (list $1-start-pos $4-end-pos)))]
+     [(DOLLAR COLONLBRACK exp COMMA exp RBRACK)
+      (pos `(in-field ,$3 ,$5)
+           `((,$1-start-pos ,$5-end-pos)))]
+     [(DOLLAR DOTLPAR cmd RPAR) (pos `(parencmd ,(pos-val $3))
+                                     `((,$1-start-pos ,$4-end-pos)))]
+     [(DOLLAR DOTLBRACK cmd RBRACK)
+      (pos $3 (list (list $1-start-pos $4-end-pos)))]
+     [(DOLLAR DOTLBRACK cmd COMMA exp RBRACK)
+      (pos `(in-field ,$3 ,$5)
+           `((,$1-start-pos ,$5-end-pos)))]
+     [(DOLLAR LPAR cmd RPAR)
+      (begin (printf "EP1: ~s~n" $4-end-pos)
+      (pos `(parencmd ,(depos $3)) `((,$1-start-pos ,$4-end-pos))))]
+     [(DOLLAR LBRACK cmd RBRACK)
+      (pos $3 (list (list $1-start-pos $4-end-pos)))]
+     [(DOLLAR LBRACK cmd COMMA exp RBRACK)
+      (pos `(in-field ,(depos $3) ,$5)
+           `((,$1-start-pos ,$5-end-pos)))])
     (cmd-items
-     [(cmd-item cmd-items) (cons $1 $2)]
-     [() '()])
+     [(cmd-item cmd-items) (pos (cons (pos-val $1) (pos-val $2))
+                                (append (pos-pos $1) (pos-pos $2)))]
+     [() (pos '() '())])
     (cmd-tail
-     [(LT cmd-item cmd-tail) `(pipe-input ,$2 ,$3)]
-     [(PIPE simple-cmd) `(pipe ,$2)]
-     [(PIPEAMP simple-cmd) `(pipeamp ,$2)]
-     [(GT cmd-item) `(redirect 1 truncate/replace ,$2)]
-     [(GTGT cmd-item) `(redirect 1 append ,$2)]
-     [(GTAMP cmd-item) `(redirect both truncate/replace ,$2)]
-     [(SEMI) '()]
+     [(LT cmd-item cmd-tail) (pos `(pipe-input ,(pos-val $2) ,(pos-val $3))
+                                  (list* (list $1-start-pos $1-end-pos)
+                                         (append (pos-pos $2) (pos-pos $3))))]
+     [(PIPE simple-cmd) (pos `(pipe ,(pos-val $2))
+                             (cons (list $1-start-pos $1-end-pos)
+                                   (pos-pos $2)))]
+     [(PIPEAMP simple-cmd)
+      (pos `(pipeamp ,(pos-val $2))
+           (cons (list $1-start-pos $1-end-pos) (pos-pos $2)))]
+     [(GT cmd-item) (pos `(redirect 1 truncate/replace ,(pos-val $2))
+                         (cons (list $1-start-pos $1-end-pos) (pos-pos $2)))]
+     [(GTGT cmd-item) (pos `(redirect 1 append ,(pos-val $2))
+                           (cons (list $1-start-pos $1-end-pos) (pos-pos $2)))]
+     [(GTAMP cmd-item) (pos `(redirect both truncate/replace ,(pos-val $2))
+                            (cons (list $1-start-pos $1-end-pos) (pos-pos $2)))]
+     [(SEMI) (pos '() '())]
      ;; [(AMPAMP cmd) `(&&. ,$2)]
      ;; [(PIPEPIPE cmd) `(||. ,$2)]
-     [() '()])
+     [() (pos '() '())])
     (function-clause
      [(=! ATOM arg-pat guard pipe exp)
       `(=! ,$2 ,$3 ,$4 ,$5, $6)]
@@ -276,15 +316,17 @@
          [(exp // exp) `(once (// ,$1 ,$3))]
          [(exp //*) `(once (//* ,$1))]
          [(exp :: exp) `(:: ,$1 ,@(cflatten $3))]
-         [(DOLLAR DOTLPAR cmd RPAR) `(parencmd ,$3)]
+         [(DOLLAR DOTLPAR cmd RPAR) `(parencmd ,(depos $3))]
          [(DOLLAR COLONLPAR exp RPAR) `(parencmd ,$3)]
          [(DOLLAR LPAR exp RPAR) `(parencmd ,$3)]
-         [(DOLLAR DOTLBRACK cmd RBRACK) $3]
-         [(DOLLAR DOTLBRACK cmd COMMA exp RBRACK) `(in-field ,$3 ,$5)]
+         [(DOLLAR DOTLBRACK cmd RBRACK) (depos $3)]
+         [(DOLLAR DOTLBRACK cmd COMMA exp RBRACK)
+          (pos `(in-field ,(depos $3) ,$5) '())]
          [(DOLLAR COLONLBRACK exp RBRACK) $3]
-         [(DOLLAR COLONLBRACK exp COMMA exp RBRACK) `(in-field ,$3 ,$5)]
+         [(DOLLAR COLONLBRACK exp COMMA exp RBRACK)
+          (pos `(in-field ,$3 ,$5) '())]
          [(DOLLAR LBRACK exp RBRACK) $3]
-         [(DOLLAR LBRACK exp COMMA exp RBRACK) `(in-field ,$3 ,$5)]
+         [(DOLLAR LBRACK exp COMMA exp RBRACK) (pos `(in-field ,$3 ,$5) '())]
          [(exp REM exp) `(remainder ,$1 ,$3)]
          [(exp ** exp) `(** ,$1 ,$3)]
          [(to-exp) $1]
@@ -328,7 +370,7 @@
          [(CASE exp OF case-clauses END) `(case ,$2 ,$4)]
          [(LOOP ATOM WITH var-bindings -> exp END)
           `(app (fun ,$2 ,(bindings->argpat $4) #f -> ,$6)
-                ,(binding-values $4) #f)]
+                 ,(binding-values $4) #f)]
          [(LBRACE exp RBRACE) `(bracefun ,$2 ,$1-start-pos ,$3-end-pos)]
          [(LBRACE standard-binop RBRACE)
           `(bracefun ,$2 ,$1-start-pos ,$3-end-pos)]
@@ -406,10 +448,10 @@
                     [(DOLLAR COLONLPAR exp RPAR) `(paren ,$3)]
                     [(DOLLAR COLONLBRACK exp RBRACK)
                      `(bracket ,$3)]
-                    [(DOLLAR DOTLPAR cmd RPAR) `(paren ,$3)]
+                    [(DOLLAR DOTLPAR cmd RPAR) `(paren ,(depos $3))]
                     [(DOLLAR DOTLBRACK cmd RBRACK) `(bracket ,$3)]
-                    [(DOLLAR LPAR cmd RPAR) `(paren ,$3)]
-                    [(DOLLAR LBRACK cmd RBRACK) `(bracket ,$3)])
+                    [(DOLLAR LPAR cmd RPAR) `(paren ,(depos $3))]
+                    [(DOLLAR LBRACK cmd RBRACK) `(bracket ,(depos $3))])
     (atomstrtail [(atomstrtailexp atomstrtail) (cons $1 $2)]
                  [(STRBOUND) '()])
     (str [(STRBOUND strtail) `(strexps ,$2)])
@@ -417,8 +459,8 @@
                 [(VAR) `(var ,$1)]
                 [(DOLLAR COLONLPAR exp RPAR) `(paren ,$3)]
                 [(DOLLAR COLONLBRACK exp RBRACK) `(bracket ,$3)]
-                [(DOLLAR DOTLPAR cmd RPAR) `(paren ,$3)]
-                [(DOLLAR DOTLBRACK cmd RBRACK) `(bracket ,$3)]
+                [(DOLLAR DOTLPAR cmd RPAR) `(paren ,(depos $3))]
+                [(DOLLAR DOTLBRACK cmd RBRACK) `(bracket ,(depos $3))]
                 [(DOLLAR LPAR exp RPAR) `(paren ,$3)]
                 [(DOLLAR LBRACK exp RBRACK) `(bracket ,$3)])
     (strtail [(strtailexp strtail) (cons $1 $2)]
@@ -428,10 +470,10 @@
                  [(VAR) `(var ,$1)]
                  [(DOLLAR COLONLPAR exp RPAR) `(paren ,$3)]
                  [(DOLLAR COLONLBRACK exp RBRACK) `(bracket ,$3)]
-                 [(DOLLAR DOTLPAR cmd RPAR) `(paren ,$3)]
-                 [(DOLLAR DOTLBRACK cmd RBRACK) `(bracket ,$3)]
-                 [(DOLLAR LPAR cmd RPAR) `(paren ,$3)]
-                 [(DOLLAR LBRACK cmd RBRACK) `(bracket ,$3)])
+                 [(DOLLAR DOTLPAR cmd RPAR) `(paren ,(depos $3))]
+                 [(DOLLAR DOTLBRACK cmd RBRACK) `(bracket ,(depos $3))]
+                 [(DOLLAR LPAR cmd RPAR) `(paren ,(depos $3))]
+                 [(DOLLAR LBRACK cmd RBRACK) `(bracket ,(depos $3))])
     (cstrtail [(cstrtailexp cstrtail) (cons $1 $2)]
               [(STRBOUND) '()])
     (datastruct [(str) $1]
@@ -588,16 +630,16 @@
     (cond [(empty? tail-exp) app-exp]
           [(eq? (first tail-exp) 'redirect)
            `(redirect ,app-exp ,@(rest tail-exp))]
-        [(eq? (first tail-exp) 'pipe)
-         `(pipeline ,app-exp ,(second tail-exp) #f)]
-        [(eq? (first tail-exp) 'pipeamp)
-         `(pipeline ,app-exp ,(second tail-exp) #t)]
-        [(eq? (first tail-exp) 'pipe-input)
-         (let* ([input-pipe `(file-input ,(second tail-exp))]
-                [piped-app `(pipeline ,input-pipe ,app-exp #f)])
-           (if (empty? (third tail-exp))
-               piped-app
-               (process-tail piped-app (third tail-exp))))]))
+          [(eq? (first tail-exp) 'pipe)
+           `(pipeline ,app-exp ,(second tail-exp) #f)]
+          [(eq? (first tail-exp) 'pipeamp)
+           `(pipeline ,app-exp ,(second tail-exp) #t)]
+          [(eq? (first tail-exp) 'pipe-input)
+           (let* ([input-pipe `(file-input ,(second tail-exp))]
+                  [piped-app `(pipeline ,input-pipe ,app-exp #f)])
+             (if (empty? (third tail-exp))
+                 piped-app
+                 (process-tail piped-app (third tail-exp))))]))
         ;; [(eq? (first tail-exp) '&&.)
         ;;  `(&&. ,app-exp ,(second tail-exp))]
         ;; [(eq? (first tail-exp) '||.)
@@ -735,6 +777,16 @@
 
 (define (gosh input read-state)
   (parse (mllex input read-state)))
+
+(define (hist-tokens str)
+  (let ([f (mllex str 'default)])
+    (let loop ([res '()])
+      (let* ([tok (f)]
+             [tok-val (position-token-token tok)])
+        (cond [(eq? tok-val 'EOF) (reverse (cons tok res))]
+              [(or (eq? tok-val 'ATOMBOUND) (eq? tok-val 'STRBOUND))
+               (loop res)]
+              [else (loop (cons tok res))])))))
 
 ;(trace gosh)
 

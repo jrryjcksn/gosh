@@ -1175,6 +1175,14 @@
              (sub1 (position-offset start))
              (sub1 (position-offset end))))
 
+(define (chunks spans)
+;;  spans)
+  (map (lambda (x)
+         (substring (current-exp-string)
+                    (sub1 (position-offset (first x)))
+                    (sub1 (position-offset (second x)))))
+       spans))
+
 (define (source-module)
   (or (module-name) "<toplevel>"))
 
@@ -1811,14 +1819,14 @@
     [(list '// goal solution-number) #f]
     [(list '//* goal) #f]
     [(list 'pipeline item otherpipe err) #f]
-    [(list '&&. cmd othercmd) #f]
-    [(list '||. cmd othercmd) #f]
-    [(list 'assignment var val) #f]
-    [(list 'redirect source desc mode exp) #f]
+    [(list (list '&&. cmd othercmd) _) #f]
+    [(list (list '||. cmd othercmd) _) #f]
+    [(list (list 'assignment var val) _) #f]
+    [(list (list 'redirect source desc mode exp) _) #f]
     [(list 'spliced-parencmd cmd) #t]
     [(list 'parencmd cmd) #t]
     [(list 'bracketcmd cmd) (det? cmd)]
-    [(list 'in-field cmd exp) (and (det? cmd) (det? exp))]
+    [(list (list 'in-field cmd exp) _) (and (det? cmd) (det? exp))]
     [(list 'strexps exps) #f]
     [(list 'atomexps exps) #f]
     [(list 'word-split exp) #f]
@@ -1846,7 +1854,7 @@
     [(list 'post arg1 (list 'in arg2)) (and (det? arg1) (det? arg2))]
     [(list 'post arg1 (list '&&> arg2)) (and (det? arg1) (det? arg2))]
     [(list 'post arg1 (list '\|\|> arg2)) #f]
-    [(list 'app fun args _) #f]
+    [(list (list 'app fun args _) _) #f]
     [(list 'next args) #f]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (and (det? arg1) (det? arg2) (not (semidet-binop? op)))]))
@@ -1907,14 +1915,14 @@
     [(list '// goal solution-number) #f]
     [(list '//* goal) #f]
     [(list 'pipeline item otherpipe err) #f]
-    [(list '&&. cmd othercmd) #f]
-    [(list '||. cmd othercmd) #f]
-    [(list 'assignment var val) #t]
-    [(list 'redirect source desc mode exp) #f]
+    [(list (list '&&. cmd othercmd) _) #f]
+    [(list (list '||. cmd othercmd) _) #f]
+    [(list (list 'assignment var val) _) #t]
+    [(list (list 'redirect source desc mode exp) _) #f]
     [(list 'spliced-parencmd cmd) #t]
     [(list 'parencmd cmd) #t]
     [(list 'bracketcmd cmd) (semidet? cmd)]
-    [(list 'in-field cmd exp) (and (semidet? cmd) (semidet? exp))]
+    [(list (list 'in-field cmd exp) _) (and (semidet? cmd) (semidet? exp))]
     [(list 'strexps exps) #f]
     [(list 'atomexps exps) #f]
     [(list 'word-split exp) #f]
@@ -1942,7 +1950,7 @@
     [(list 'post arg1 (list 'in arg2)) (and (semidet? arg1) (semidet? arg2))]
     [(list 'post arg1 (list '&&> arg2)) (and (semidet? arg1) (semidet? arg2))]
     [(list 'post arg1 (list '\|\|> arg2)) #f]
-    [(list 'app fun args _) #f]
+    [(list (list 'app fun args _) _) #f]
     [(list 'next args) #f]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (or (and (det? arg1) (det? arg2) (semidet-binop? op))
@@ -2007,9 +2015,15 @@
     [(list '//* goal) (compile-//* goal cont)]
     [(list 'pipeline item otherpipe err)
      (compile-pipe item otherpipe err cont)]
-    [(list '&&. cmd othercmd) (compile-&&. cmd othercmd cont)]
-    [(list '||. cmd othercmd) (compile-||. cmd othercmd cont)]
-    [(list 'assignment var val) (compile-assignment var val cont)]
+    [(list '&&. cmd othercmd)
+;;     (printf "spans: ~s~n" (chunks spans))
+     (compile-&&. cmd othercmd cont)]
+    [(list '||. cmd othercmd)
+;;     (printf "spans: ~s~n" (chunks spans))
+     (compile-||. cmd othercmd cont)]
+    [(list 'assignment var val)
+;;     (printf "spans: ~s~n" (chunks spans))
+     (compile-assignment var val cont)]
     [(list 'strexps exps) (compile-str exps cont)]
     [(list 'atomexps exps) (compile-atom exps cont)]
     [(list 'word-split exp) (compile-word-split exp cont)]
@@ -2018,7 +2032,8 @@
     [(list 'spliced-parencmd cmd) (compile-parencmd cmd cont #t)]
     [(list 'parencmd cmd) (compile-parencmd cmd cont #t)]
     [(list 'bracketcmd cmd) (compile-bracketcmd cmd cont)]
-    [(list 'in-field cmd exp) (compile-in-field cmd exp cont)]
+    [(list 'in-field cmd exp)
+     (compile-in-field cmd exp cont)]
     [(list 'function-clause
            (list (and discriminator (or '=! '<! '>! '<? '>? '>~))
                  name pat guard pipe exp)
@@ -2060,7 +2075,9 @@
     [(list 'post arg1 (list 'in arg2)) (compile-simple-in arg1 arg2 cont)]
     [(list 'post arg1 (list '&&> arg2)) (compile-simple-&&> arg1 arg2 cont)]
     [(list 'post arg1 (list '\|\|> arg2)) (compile-simple-||> arg1 arg2 cont)]
-    [(list 'app fun args expand-strs) (compile-app fun args expand-strs cont)]
+    [(list 'app fun args expand-strs)
+;;     (printf "spans: ~s~n" (chunks spans))
+     (compile-app fun args expand-strs cont)]
     [(list 'next args) (compile-next args cont)]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (compile-binop op arg1 arg2 cont)]))
@@ -2105,6 +2122,7 @@
   (simplify (gosh-compile (gosh expstr 'default) 'identity)))
 
 (define (gosh-compile exp cont)
+  (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
   (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))

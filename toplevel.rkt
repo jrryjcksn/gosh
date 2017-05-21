@@ -766,7 +766,7 @@
           [else (loop (rest h))])))
 
 (define (hist-replace str)
-    (let ([hist .history])
+  (let ([hist .history])
     (match str
            ["!!" (if (null? hist) "!!" (first hist))]
            [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
@@ -800,9 +800,12 @@
                (current-directory .pwd)
                (current-exp-string exp)]
               (local-custodian cust)
-              (set! exp (hist-expand exp))
+              (when (equal? read-state 'default)
+                    (set! exp (hist-expand exp)))
               (set! .history
                     (if (or (equal? exp "")
+                            (equal? read-state 'colon)
+                            (regexp-match #rx"\\s*[:].*" exp)
                             (regexp-match #rx"\\s*history\\s*" exp))
                         .history
                         (cons exp .history)))
