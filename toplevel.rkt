@@ -789,6 +789,9 @@
        ""))))
 
 (define (hist-range hr l . h)
+  (when (and (equal? l "*") (null? h))
+        (set! l "^")
+        (set! h '("$")))
   (define pieces (hist-record-pieces hr))
   (define num-pieces (length pieces))
   (define lnum
@@ -818,6 +821,11 @@
                 str
                 (let ([fhist (first hist)])
                   (hist-value fhist (hist-range fhist lnumstr hnumstr))))]
+           [(pregexp #px"^![!]?:[*]$" (list _))
+            (if (null? hist)
+                str
+                (let ([fhist (first hist)])
+                  (hist-value fhist (hist-range fhist "*"))))]
            [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
             (hist-replace-num hist numstr #f)]
            [(pregexp #px"^!([0-9]+)$" (list _ numstr))
