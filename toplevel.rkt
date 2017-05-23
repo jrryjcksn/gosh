@@ -8,6 +8,8 @@
 
 (provide (all-defined-out))
 
+(struct hist-record (str pieces) #:transparent)
+
 (define local-custodian (make-parameter #f))
 
 (define .history '())
@@ -744,7 +746,7 @@
              (top-level-eprint (format "No such event: ~s~%"
                                        (if pos num (- (length hist) num))))
              ""]
-             [(<= index 0) (first h)]
+             [(<= index 0) (hist-record-str (first h))]
              [else (loop (rest h) (sub1 index))]))))
 
 (define (hist-replace-prefix hist str)
@@ -753,7 +755,7 @@
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
           [(string-prefix? (first h) str)
-           (first h)]
+           (hist-record-str (first h))]
           [else (loop (rest h))])))
 
 (define (hist-replace-contains hist str)
@@ -762,13 +764,60 @@
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
           [(string-contains? (first h) str)
-           (first h)]
+           (hist-record-str (first h))]
           [else (loop (rest h))])))
+
+(define (hist-value rec range)
+  (let* ([str (hist-record-str rec)]
+         [pieces (hist-record-pieces rec)]
+         [num-pieces (length pieces)]
+         [low (first range)]
+         [high (second range)])
+    (or
+     (and (<= low high)
+          (< high num-pieces)
+          (let ([refs (take (list-tail pieces low) (add1 (- high low)))])
+            (string-join
+             (map (lambda (ref)
+                    (substring str
+                               (sub1 (position-offset (first ref)))
+                               (sub1 (position-offset (second ref)))))
+                  refs)
+             " ")))
+     (begin
+       (top-level-eprint (format "No such reference: ~s~%" str))
+       ""))))
+
+(define (hist-range hr l . h)
+  (define pieces (hist-record-pieces hr))
+  (define num-pieces (length pieces))
+  (define lnum
+    (cond [(equal? l "^") 1]
+          [(equal? l "$") (sub1 num-pieces)]
+          [else (string->number l)]))
+  (define hnum
+    (cond [(null? h) lnum]
+          [(equal? (first h) "$") (sub1 num-pieces)]
+          [else (string->number (first h))]))
+  (list lnum hnum))
+
+(trace hist-range hist-value)
 
 (define (hist-replace str)
   (let ([hist .history])
     (match str
-           ["!!" (if (null? hist) "!!" (first hist))]
+           ["!!" (if (null? hist) str (hist-record-str (first hist)))]
+           [(pregexp #px"^![!]?:([0-9]+|[$^])$" (list _ numstr))
+            (if (null? hist)
+                str
+                (let ([fhist (first hist)])
+                  (hist-value fhist (hist-range fhist numstr))))]
+           [(pregexp #px"^![!]?:([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                     (list _ lnumstr hnumstr))
+            (if (null? hist)
+                str
+                (let ([fhist (first hist)])
+                  (hist-value fhist (hist-range fhist lnumstr hnumstr))))]
            [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
             (hist-replace-num hist numstr #f)]
            [(pregexp #px"^!([0-9]+)$" (list _ numstr))
@@ -778,6 +827,11 @@
            [(pregexp #px"^[!][^{][^ \n\t\r?]*$" (list _))
             (hist-replace-prefix hist (substring str 1))]
            [_ str])))
+
+(define (parse-history exp)
+    (match (gosh exp 'default)
+           [(struct pos (val p)) (hist-record exp p)]
+           [other (hist-record other '())]))
 
 (define (cont-for-read-state read-state)
   (if (eq? read-state 'colon)
@@ -808,7 +862,7 @@
                             (regexp-match #rx"\\s*[:].*" exp)
                             (regexp-match #rx"\\s*history\\s*" exp))
                         .history
-                        (cons exp .history)))
+                        (cons (parse-history exp) .history)))
               (thread
                (lambda ()
                  (with-handlers
