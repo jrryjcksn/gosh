@@ -20,7 +20,7 @@
     {; (let loop ([hist (reverse .history)] [index 1])
           (if (empty? hist)
               (void)
-              (begin (printf "~s ~a\n" index (first hist))
+              (begin (printf "~s ~a\n" index (hist-record-str (first hist)))
                      (loop (rest hist) (add1 index))))) ;}.
 
 # # flush the cache of already loaded modules (when something about the

@@ -1854,7 +1854,7 @@
     [(list 'post arg1 (list 'in arg2)) (and (det? arg1) (det? arg2))]
     [(list 'post arg1 (list '&&> arg2)) (and (det? arg1) (det? arg2))]
     [(list 'post arg1 (list '\|\|> arg2)) #f]
-    [(list (list 'app fun args _) _) #f]
+    [(list 'app fun args _) #f]
     [(list 'next args) #f]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (and (det? arg1) (det? arg2) (not (semidet-binop? op)))]))
@@ -1950,7 +1950,7 @@
     [(list 'post arg1 (list 'in arg2)) (and (semidet? arg1) (semidet? arg2))]
     [(list 'post arg1 (list '&&> arg2)) (and (semidet? arg1) (semidet? arg2))]
     [(list 'post arg1 (list '\|\|> arg2)) #f]
-    [(list (list 'app fun args _) _) #f]
+    [(list 'app fun args _) #f]
     [(list 'next args) #f]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (or (and (det? arg1) (det? arg2) (semidet-binop? op))

@@ -584,7 +584,7 @@
                                   (lambda (err)
                                     (eprintf "Error executing ~s: ~s~%"
                                              exp err))])
-                              (let* ([parsed (gosh exp token-state)])
+                                (let* ([parsed (gosh exp token-state)])
                                 (if parsed
                                     (loop new-read-state
                                           (if (process-import parsed)
@@ -739,32 +739,34 @@
           (let ([hchunk (hist-replace (first c))])
             (and hchunk (loop (rest c) (cons hchunk rep-chunks))))))))
 
-(define (hist-replace-num hist numstr pos)
+(define (hist-replace-num hist numstr pos low high)
   (let ([num (string->number numstr)])
     (let loop ([h hist] [index (sub1 num)])
       (cond [(null? h)
              (top-level-eprint (format "No such event: ~s~%"
                                        (if pos num (- (length hist) num))))
              ""]
-             [(<= index 0) (hist-record-str (first h))]
+            [(<= index 0)
+             (let ([fhist (first h)])
+               (hist-value fhist (hist-range fhist low high)))]
              [else (loop (rest h) (sub1 index))]))))
 
-(define (hist-replace-prefix hist str)
+(define (hist-replace-prefix hist str low high)
   (let loop ([h hist])
     (cond [(empty? h)
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
-          [(string-prefix? (first h) str)
-           (hist-record-str (first h))]
+          [(string-prefix? (hist-record-str (first h)) str)
+           (hist-value (first h) (hist-range (first h) low high))]
           [else (loop (rest h))])))
 
-(define (hist-replace-contains hist str)
+(define (hist-replace-contains hist str low high)
   (let loop ([h hist])
     (cond [(empty? h)
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
-          [(string-contains? (first h) str)
-           (hist-record-str (first h))]
+          [(string-contains? (hist-record-str (first h)) str)
+           (hist-value (first h) (hist-range (first h) low high))]
           [else (loop (rest h))])))
 
 (define (hist-value rec range)
@@ -804,37 +806,69 @@
           [else (string->number (first h))]))
   (list lnum hnum))
 
-(trace hist-range hist-value)
-
 (define (hist-replace str)
   (let ([hist .history])
-    (match str
-           ["!!" (if (null? hist) str (hist-record-str (first hist)))]
-           [(pregexp #px"^![!]?:([0-9]+|[$^])$" (list _ numstr))
-            (if (null? hist)
-                str
+    (if (null? hist)
+        str
+        (match str
+               ["!!" (if (null? hist) str (hist-record-str (first hist)))]
+               [(pregexp #px"^![!]?:([0-9]+|[$^])$" (list _ numstr))
                 (let ([fhist (first hist)])
-                  (hist-value fhist (hist-range fhist numstr))))]
-           [(pregexp #px"^![!]?:([0-9]+|[$^])[-]([0-9]+|[$^])$"
-                     (list _ lnumstr hnumstr))
-            (if (null? hist)
-                str
+                  (hist-value fhist (hist-range fhist numstr)))]
+               [(pregexp #px"^![!]?:([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                         (list _ lnumstr hnumstr))
                 (let ([fhist (first hist)])
-                  (hist-value fhist (hist-range fhist lnumstr hnumstr))))]
-           [(pregexp #px"^![!]?:[*]$" (list _))
-            (if (null? hist)
-                str
+                  (hist-value fhist (hist-range fhist lnumstr hnumstr)))]
+               [(pregexp #px"^![!]?:[*]$" (list _))
                 (let ([fhist (first hist)])
-                  (hist-value fhist (hist-range fhist "*"))))]
-           [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
-            (hist-replace-num hist numstr #f)]
-           [(pregexp #px"^!([0-9]+)$" (list _ numstr))
-            (hist-replace-num (reverse hist) numstr #t)]
-           [(pregexp #px"^[!][?][^{][^ \n\t\r?]*$" (list _))
-            (hist-replace-contains hist (substring str 2))]
-           [(pregexp #px"^[!][^{][^ \n\t\r?]*$" (list _))
-            (hist-replace-prefix hist (substring str 1))]
-           [_ str])))
+                  (hist-value fhist (hist-range fhist "*")))]
+               [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
+                (hist-replace-num hist numstr #f "0" "$")]
+               [(pregexp #px"^![-]([0-9]+):[*]$" (list _ numstr))
+                (hist-replace-num hist numstr #f "1" "$")]
+               [(pregexp #px"^![-]([0-9]+):([0-9]+|[$^])$"
+                         (list _ numstr istr))
+                (hist-replace-num hist numstr #f istr istr)]
+               [(pregexp #px"^![-]([0-9]+):([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                         (list _ numstr lnumstr hnumstr))
+                (hist-replace-num hist numstr #f lnumstr hnumstr)]
+               [(pregexp #px"^!([0-9]+)$" (list _ numstr))
+                (hist-replace-num (reverse hist) numstr #t "0" "$")]
+               [(pregexp #px"^!([0-9]+):[*]$" (list _ numstr))
+                (hist-replace-num (reverse hist) numstr #t "1" "$")]
+               [(pregexp #px"^!([0-9]+):([0-9]+|[$^])$"
+                         (list _ numstr istr))
+                (hist-replace-num (reverse hist) numstr #t istr istr)]
+               [(pregexp #px"^!([0-9]+):([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                         (list _ numstr lnumstr hnumstr))
+                (hist-replace-num (reverse hist) numstr #t lnumstr hnumstr)]
+               [(pregexp #px"^[!][?][^{][^ \n\t\r?:]*$" (list _))
+                (hist-replace-contains hist (substring str 2) "0" "$")]
+               [(pregexp #px"^[!][?]([^{][^ \n\t\r?:*]*):[*]$"
+                         (list _ contstr))
+                (hist-replace-contains hist contstr "1" "$")]
+               [(pregexp #px"^[!][?]([^{][^ \n\t\r?:]*):([0-9]+|[$^])$"
+                         (list _ contstr numstr))
+                (hist-replace-contains hist contstr numstr numstr)]
+               [(pregexp
+                 #px"^[!][?]([^{][^ \n\t\r?:]*):([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                 (list _ contstr lnumstr hnumstr))
+                (hist-replace-contains hist contstr lnumstr hnumstr)]
+               [(pregexp #px"^[!][^{][^ \n\t\r?:]*$" (list _))
+                (hist-replace-prefix hist (substring str 1) "0" "$")]
+               [(pregexp #px"^[!]([^{][^ \n\t\r?:*]*):[*]$"
+                         (list _ contstr))
+                (hist-replace-prefix hist contstr "1" "$")]
+               [(pregexp #px"^[!]([^{][^ \n\t\r?:*]*):([0-9]+|[$^])$"
+                         (list _ contstr numstr))
+                (hist-replace-prefix hist contstr numstr numstr)]
+               [(pregexp
+                 #px"^[!]([^{][^ \n\t\r?:*]*):([0-9]+|[$^])[-]([0-9]+|[$^])$"
+                 (list _ contstr lnumstr hnumstr))
+                (hist-replace-prefix hist contstr lnumstr hnumstr)]
+               [_ str]))))
+
+;(trace hist-replace-num hist-value hist-range hist-replace-contains hist-replace-prefix)
 
 (define (parse-history exp)
     (match (gosh exp 'default)
@@ -863,7 +897,10 @@
                (current-exp-string exp)]
               (local-custodian cust)
               (when (equal? read-state 'default)
-                    (set! exp (hist-expand exp)))
+                    (let ([orig-exp exp])
+                      (set! exp (hist-expand exp))
+                      (when (not (equal? orig-exp exp))
+                            (fprintf out "~a~%" exp))))
               (set! .history
                     (if (or (equal? exp "")
                             (equal? read-state 'colon)
