@@ -896,7 +896,8 @@
                (current-directory .pwd)
                (current-exp-string exp)]
               (local-custodian cust)
-              (when (equal? read-state 'default)
+              (when (and (equal? read-state 'default)
+                         (not (regexp-match #rx"\\s*[:].*" exp)))
                     (let ([orig-exp exp])
                       (set! exp (hist-expand exp))
                       (when (not (equal? orig-exp exp))

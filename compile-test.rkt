@@ -29,7 +29,7 @@
 ;;                            (seq->list (expand (cdr seq))))]
 ;;         [else seq]))
 
-(define (grun str mode . vars)
+(define (grun str mode)
   ;; (pprint #t)
   (adjust-return-code)
   (cond ((eqv? (string-ref str 0) #\:)
@@ -42,12 +42,7 @@
           (parameterize [(compile-allow-set!-undefined #t)
                          (current-exp-string str)
                          (print-as-expression #f)
-                         (current-directory .pwd)
-                         (variable-store-constructor
-                          (if (equal? mode 'default)
-                              (lambda (name val)
-                                `(namespace-set-variable-value! ',name ,val))
-                              (variable-store-constructor)))]
+                         (current-directory .pwd)]
             `(let ([,results '()])
                (parameterize [(current-custodian (make-custodian))]
                  ,(gosh-compile
@@ -60,9 +55,7 @@
       (pretty-print (simplify exp)))
     (parameterize [(compile-allow-set!-undefined #t)
                    (.gosh-loader gosh-load)]
-                  (let ([final-result
-                         (eval (if (empty? vars) exp `(let ,vars ,exp))
-                               gosh-test-ns)])
+                  (let ([final-result (eval exp gosh-test-ns)])
                     final-result))))
                     ;; (map (lambda (r)
                     ;;        (if (mpair? r)
@@ -77,17 +70,25 @@
      (lambda (mode)
        (define (perform-check result exp vars mode)
          (define (do-check)
-           (if (list? exp)
-               (check-gosh-equal? (last (map (lambda (e)
-                                               (apply grun e mode vars))
-                                             exp))
-                                  result
-                                  (format "~s" exp))
-               (check-gosh-equal? (apply grun exp mode vars) result exp)))
-         (with-handlers
-          ([exn? (lambda (_)
-                   (check-equal? result 'error))])
-          (do-check)))
+           (parameterize
+            [(.free-vars (if (empty? vars)
+                             (make-hash)
+                             (make-hash
+                              (map (lambda (l)
+                                     (cons (string->symbol
+                                            (string-append
+                                             "<toplevel>.."
+                                             (symbol->string (first l))))
+                                           (second l)))
+                                   vars))))]
+            (if (list? exp)
+                (check-gosh-equal? (last (map (lambda (e) (grun e mode)) exp))
+                                   result
+                                   (format "~s" exp))
+                (check-gosh-equal? (grun exp mode) result exp))))
+           (with-handlers
+            ([exn? (lambda (_) (check-equal? 'error result))])
+            (do-check)))
        (values
         (lambda (result exp . vars)
           (when (getenv "PRINT_TESTS")
@@ -97,7 +98,8 @@
           (when (getenv "PRINT_TESTS")
             (printf "ENSURED(~s): ~s~%" current-ensure result)))
         (lambda (result exp . vars)
-          (parameterize ([pprint #t]) (perform-check result exp vars mode)))))))
+          (parameterize ([pprint #t])
+                        (perform-check result exp vars mode)))))))
 
 (define-values (ensure ensurep) (make-ensures 'colon))
 (define-values (ensure-shell ensure-shellp) (make-ensures 'default))
@@ -154,15 +156,15 @@
 (ensure '(6 28) "^[3, 14]*2")
 (ensure '(17) "^^^^```@*@*@*@*```(3*4+5)")
 (ensure '(17) "^^^^```@@@@```(3*4+5)")
-(ensure '(1 2 3) "`($n < 2) && ^[1,2,3]" '($n 1))
-(ensure '(1 2 3) "if $n < 2 then ^[1,2,3] fi" '($n 1))
-(ensure '() "if $n < 2 then ^[1,2,3] fi" '($n 2))
-(ensure '(1 2 3) "if $n < (2 || 3) then ^[1,2,3] fi" '($n 1))
-(ensure '() "if $n < (2 || 1) then ^[1,2,3] fi" '($n 2))
-(ensure '(1 2 3) "if $n < (2 || 3) then ^[1,2,3] else ^[4,5,6] fi" '($n 1))
-(ensure '(4 5 6) "if $n < (2 || 1) then ^[1,2,3] else ^[4,5,6] fi" '($n 2))
-(ensure '(4 5 6) "if $n < 2 then ^[1,2,3] elif $n < 3 then ^[4,5,6] else ^[7,8,9] fi" '($n 2))
-(ensure '(7 8 9) "if $n < 2 then ^[1,2,3] elif $n < 3 then ^[4,5,6] else ^[7,8,9] fi" '($n 3))
+(ensure '(1 2 3) "`($n < 2) && ^[1,2,3]" '(n 1))
+(ensure '(1 2 3) "if $n < 2 then ^[1,2,3] fi" '(n 1))
+(ensure '() "if $n < 2 then ^[1,2,3] fi" '(n 2))
+(ensure '(1 2 3) "if $n < (2 || 3) then ^[1,2,3] fi" '(n 1))
+(ensure '() "if $n < (2 || 1) then ^[1,2,3] fi" '(n 2))
+(ensure '(1 2 3) "if $n < (2 || 3) then ^[1,2,3] else ^[4,5,6] fi" '(n 1))
+(ensure '(4 5 6) "if $n < (2 || 1) then ^[1,2,3] else ^[4,5,6] fi" '(n 2))
+(ensure '(4 5 6) "if $n < 2 then ^[1,2,3] elif $n < 3 then ^[4,5,6] else ^[7,8,9] fi" '(n 2))
+(ensure '(7 8 9) "if $n < 2 then ^[1,2,3] elif $n < 3 then ^[4,5,6] else ^[7,8,9] fi" '(n 3))
 (ensure '(#hash(("x" . 6))) "6 ~> $x")
 (ensure '(#hash(("x" . 6))) "6 ~> $x when 4")
 (ensure '(28) "6 in % + 22")

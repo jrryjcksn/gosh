@@ -415,11 +415,21 @@
 
 (define (compile-var-aux name cont stringify)
   (update-numeric-var-information-if-appropriate name)
-  `(begin
-     ,@(if (member name (defined-vars))
-          '()
-          `((ensure-var-defined ',name)))
-     (,cont ,(if stringify `(.stringify ,name) `,name))))
+  `(,cont ,(cond [(member name (defined-vars))
+                  (if stringify `(.stringify ,name) name)]
+                 [(eq? name '$$)
+                  `(getpid)]
+                 [(eq? name '$?)
+                  `(get-dollar-q)]
+                 [else
+                  (let ([lookup
+                         `(.look-up-free-var
+                           ',(string->symbol
+                              (string-append
+                               (source-module)
+                               ".."
+                               (substring (symbol->string name) 1))))])
+                    (if stringify `(.stringify ,lookup) lookup))])))
 
 (define (compile-var name cont)
   (compile-var-aux name cont #f))
@@ -450,11 +460,15 @@
         ,(compile-simple-match arg-val pat cont)))))
 
 (define (is-pat-var? item)
-  (and (symbol? item) (eqv? (string-ref (symbol->string item) 0) #\$)))
+  (or (and (symbol? item) (eqv? (string-ref (symbol->string item) 0) #\$))
+      (var? item)))
 
 (define (pat-vars pat)
   (cond [(pair? pat) (append (pat-vars (car pat)) (pat-vars (cdr pat)))]
-        [(is-pat-var? pat) (list pat)]
+        [(is-pat-var? pat)
+         (if (symbol? pat)
+             (list pat)
+             (list (var-name pat)))]
         ['()]))
 
 (define (hash-exp pat)
@@ -485,7 +499,10 @@
      `(lambda (,arg-val)
         (let ,bindings
           (match ,arg-val
-            [,(translate-pattern pat) ,(gcomp arg2 cont)]
+                 [,(translate-pattern pat)
+                  ,(parameterize
+                    [(defined-vars (append (pat-vars pat) (defined-vars)))]
+                    (gcomp arg2 cont))]
             [_ #f]))))))
 
 (define (translate-pattern pat)
@@ -521,7 +538,9 @@
   (let* ([arg (new-arg)]
          [bindings (match-up-anon arg)]
          [incode
-          (parameterize ([nesting-level (add1 (nesting-level))])
+          (parameterize
+           [(nesting-level (add1 (nesting-level)))
+            (defined-vars (append (pat-vars arg1) (defined-vars)))]
             (gcomp arg2 cont))])
     (gcomp
      arg1
@@ -578,7 +597,9 @@
          [bindings (match-up-anon arg-val)]
          [fail (gensym "fail-")]
          [filtcode
-          (parameterize ([nesting-level (add1 (nesting-level))])
+          (parameterize
+           [(nesting-level (add1 (nesting-level)))
+            (defined-vars (append (pat-vars exp) (defined-vars)))]
             `(begin
                ,(gcomp
                  filtexp
@@ -592,10 +613,12 @@
                     `(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
                     #f)))]
          [expcode
-          (if is-while
+          (parameterize
+           [(defined-vars (append (pat-vars exp) (defined-vars)))]
+           (if is-while
               `(let ([,fail #t])
                  ,(gcomp exp `(lambda (,arg-val) (let ,bindings ,filtcode))))
-              (gcomp exp `(lambda (,arg-val) (let ,bindings ,filtcode))))])
+              (gcomp exp `(lambda (,arg-val) (let ,bindings ,filtcode)))))])
     (if is-while
         `(call/ec (lambda (,ec) ,expcode))
         expcode)))
@@ -608,38 +631,44 @@
          [bindings (match-up-anon exp-val)]
          [fail (gensym "fail-")]
          [filtcode
-          (parameterize ([nesting-level (add1 (nesting-level))])
-            `(begin
-               ,(gcomp
+          (parameterize
+           ([nesting-level (add1 (nesting-level))])
+           `(begin
+              ,(parameterize
+                [(defined-vars (append (pat-vars pat) (defined-vars)))]
+                (gcomp
                  filtexp
                  (if is-while
                      `(lambda (,filt-val)
                         (set! ,fail #f)
                         (,cont ,(hash-exp pat)))
                      `(lambda (,filt-val)
-                        (,cont ,(hash-exp pat)))))
-               ,(if is-while
-                    `(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
-                    #f)))]
+                        (,cont ,(hash-exp pat))))))
+              ,(if is-while
+                   `(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
+                   #f)))]
          [expcode
-          (if is-while
-              `(let ([,fail #t])
-                 (gcomp
-                  exp
-                  `(lambda (,exp-val)
-                     (let ,bindings
-                       (match ,exp-val
-                         [,(translate-pattern pat)
-                          ,filtcode]
-                         [_ #f])))))
-              (gcomp
-               exp
-               `(lambda (,exp-val)
-                  (let ,bindings
-                    (match ,exp-val
-                      [,(translate-pattern pat)
-                       ,filtcode]
-                      [_ #f])))))])
+          (parameterize
+           [(defined-vars
+              (append (pat-vars exp) (pat-vars pat) (defined-vars)))]
+           (if is-while
+               `(let ([,fail #t])
+                  (gcomp
+                   exp
+                   `(lambda (,exp-val)
+                      (let ,bindings
+                        (match ,exp-val
+                               [,(translate-pattern pat)
+                                ,filtcode]
+                               [_ #f])))))
+               (gcomp
+                exp
+                `(lambda (,exp-val)
+                   (let ,bindings
+                     (match ,exp-val
+                            [,(translate-pattern pat)
+                             ,filtcode]
+                            [_ #f]))))))])
     (if is-while
         `(call/ec (lambda (,ec) ,expcode))
         expcode)))
@@ -652,24 +681,31 @@
          [bindings (match-up-anon exp-val)]
          [fail (gensym "fail-")]
          [incode
-          (parameterize ([nesting-level (add1 (nesting-level))])
+          (parameterize
+           [(nesting-level (add1 (nesting-level)))
+            (defined-vars (append (pat-vars pat) (defined-vars)))]
             (gcomp inexp cont))]
          [filtcode
           (parameterize ([nesting-level (add1 (nesting-level))])
             `(begin
-               ,(gcomp
+              ,(parameterize
+                [(defined-vars (append (pat-vars pat) (defined-vars)))]
+                (gcomp
                  filtexp
                  (if is-while
                      `(lambda (,filt-val)
                         (set! ,fail #f)
                         ,incode)
                      `(lambda (,filt-val)
-                        ,incode)))
+                        ,incode))))
                ,(if is-while
                     `(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
                     #f)))]
          [expcode
-          (if is-while
+          (parameterize
+           [(defined-vars
+              (append (pat-vars exp) (pat-vars pat) (defined-vars)))]
+            (if is-while
               `(let ([,fail #t])
                  ,(gcomp
                    exp
@@ -686,10 +722,12 @@
                     (match ,exp-val
                       [,(translate-pattern pat)
                        ,filtcode]
-                      [_ #f])))))])
+                      [_ #f]))))))])
     (if is-while
         `(call/ec (lambda (,ec) ,expcode))
         expcode)))
+
+;(trace compile-simple-filter compile-full-post compile-match-filter compile-match-in compile-simple-match)
 
 (define (compile-recseq args cont)
   (let* ([oargs (map (lambda (x) `(once ,x)) args)]
@@ -964,7 +1002,10 @@
                  (,cont (namespace-variable-value
                          (.fun-name ,namestr)))))))]
         [_
-         (let ([code (gcomp exp cont-var)])
+         (let ([code
+                (parameterize
+                 [(defined-vars (append (pat-vars exp) (defined-vars)))]
+                 (gcomp exp cont-var))])
            (if (> (dollar-var-max) 0)
                `(,cont
                  ,(make-bracefun
@@ -1004,22 +1045,27 @@
         (gcomp
          exp
          `(lambda (,arg)
-            (match ,arg
-              ,@(compile-post-match-case-clauses clauses cont))))
+            (match
+             ,arg
+             ,@(compile-post-match-case-clauses clauses cont))))
         (parameterize
-            [(case-match-signal-var #f)]
-          (gcomp exp
-                 `(lambda (,arg)
-                    ,@(compile-case-clauses arg (reverse clauses) cont)))))))
+         [(case-match-signal-var #f)]
+         (gcomp
+          exp
+          `(lambda (,arg)
+             ,@(compile-case-clauses arg (reverse clauses) cont)))))))
 
 (define (compile-post-match-case-clauses clauses cont)
-  (match clauses
-    [(cons (list _ pat guard-wrapper exp) tail)
+  (match
+   clauses
+   [(cons (list _ pat guard-wrapper exp) tail)
+    (parameterize
+     [(defined-vars (append (pat-vars pat) (defined-vars)))]
      (let ([guard (and guard-wrapper (second guard-wrapper))])
        (cons `[,pat
                ,@(compile-func-guard guard)
                ,(gcomp exp cont)]
-             (compile-post-match-case-clauses tail cont)))]
+             (compile-post-match-case-clauses tail cont))))]
     [x '()]))
 
 (define (all-post-match? clauses)
@@ -1028,6 +1074,8 @@
 (define (compile-case-clauses arg clauses cont)
   (match clauses
     [(cons (list discriminator pat guard-wrapper exp) tail)
+    (parameterize
+     [(defined-vars (append (pat-vars pat) (defined-vars)))]
      (let ([guard (and guard-wrapper (second guard-wrapper))])
        (case discriminator
          [(<!)
@@ -1115,7 +1163,7 @@
                            ,@(compile-func-guard guard)
                            ,@(maybe-signal-match)
                            ,(gcomp exp cont)]
-                          [_ #f]))))))]))]
+                          [_ #f]))))))])))]
     [x '()]))
 
 (define (maybe-signal-match)
@@ -1202,7 +1250,8 @@
          [guard-var (gensym "ignore-")]
          [clause (gensym "clause-")])
     (parameterize
-     [(defined-vars (append (pat-vars pat) (defined-vars)))]
+     [(defined-vars
+        (append (pat-vars pat) (pat-vars pipe) (pat-vars exp) (defined-vars)))]
      (when (exports)
            (exports (set-add (exports) gosh-name)))
      (case discriminator
@@ -1231,29 +1280,30 @@
                          ,namestr ',gosh-name))))
            (,cont (if (.loading) (void) ,namestr)))]
        [(=!)
-        (parameterize [(next prev-var) (matched matched-var)]
-                      (let ([cont-var (gensym "cont-")])
-                        `(begin
-                           ,@(interactive-setter gosh-name)
-                           (,(setter-name gosh-name)
-                            (let ([,prev-funobj ,gosh-name]
-                                  [,prev-var (get-fun ,gosh-name)])
-                              (let ([,clause
-                                     (lambda (,cont-var $* ,matched-var)
-                                       (match $*
-                                              [,pat
-                                               ,@(compile-func-guard guard)
-                                               (when ,matched-var (vector-set! ,matched-var 0 #t))
-                                               ,(pipe-compile pipe exp cont-var)]
-                                              [_ (,prev-var ,cont-var $* ,matched-var)]))])
+        (parameterize
+         [(next prev-var) (matched matched-var)]
+         (let ([cont-var (gensym "cont-")])
+           `(begin
+              ,@(interactive-setter gosh-name)
+              (,(setter-name gosh-name)
+               (let ([,prev-funobj ,gosh-name]
+                     [,prev-var (get-fun ,gosh-name)])
+                 (let ([,clause
+                        (lambda (,cont-var $* ,matched-var)
+                          (match $*
+                                 [,pat
+                                  ,@(compile-func-guard guard)
+                                  (when ,matched-var (vector-set! ,matched-var 0 #t))
+                                  ,(pipe-compile pipe exp cont-var)]
+                                 [_ (,prev-var ,cont-var $* ,matched-var)]))])
                                         ;                 (init-clause-name ',clause-name)
                                         ;                 (set-func! ',clause-name ,clause)
-                                ,(wrap-clause name clause-name clause gosh-name start end)
-                                (goshfun ,clause (get-defs ,prev-funobj
-                                                           ,(source-module)
-                                                           ,(subexp start end))
-                                         ,namestr ',gosh-name))))
-                           (,cont (if (.loading) (void) ,namestr)))))]
+                   ,(wrap-clause name clause-name clause gosh-name start end)
+                   (goshfun ,clause (get-defs ,prev-funobj
+                                              ,(source-module)
+                                              ,(subexp start end))
+                            ,namestr ',gosh-name))))
+              (,cont (if (.loading) (void) ,namestr)))))]
        [(>!)
         `(begin
            ,@(interactive-setter gosh-name)
@@ -1498,15 +1548,20 @@
 
 (define (compile-assignment var val cont)
   (let ([arg (new-arg)]
-        [varname (string->symbol (string-append "$" var))])
-    (set-add! (top-level-vars) varname)
+                                        ;        [varname (string->symbol (string-append "$" var))])
+        [varname (string->symbol var)]
+        [modvarname (string->symbol
+                     (string-append (source-module) ".." var))])
+;    (set-add! (top-level-vars) varname)
     (gcomp `(once ,val)
            `(lambda (,arg)
 ;              (namespace-set-variable-value! ',varname ,arg)
 ;              (set! ,varname ,arg)
               ;; parameterize so tests can access vars that have been set
               ;; dynamically
-              ,((variable-store-constructor) varname arg)
+              (if (hash-ref (.env) ',varname #f)
+                  (hash-set! (.env) ',varname ,arg)
+                  (hash-set! (.free-vars) ',modvarname ,arg))
               (,cont (void))))))
 
 (define (compile-&&. cmd othercmd cont)
@@ -1819,9 +1874,9 @@
     [(list '// goal solution-number) #f]
     [(list '//* goal) #f]
     [(list 'pipeline item otherpipe err) #f]
-    [(list (list '&&. cmd othercmd) _) #f]
-    [(list (list '||. cmd othercmd) _) #f]
-    [(list (list 'assignment var val) _) #f]
+    [(list '&&. cmd othercmd) #f]
+    [(list '||. cmd othercmd) #f]
+    [(list 'assignment var val) #f]
     [(list (list 'redirect source desc mode exp) _) #f]
     [(list 'spliced-parencmd cmd) #t]
     [(list 'parencmd cmd) #t]
@@ -1915,9 +1970,9 @@
     [(list '// goal solution-number) #f]
     [(list '//* goal) #f]
     [(list 'pipeline item otherpipe err) #f]
-    [(list (list '&&. cmd othercmd) _) #f]
-    [(list (list '||. cmd othercmd) _) #f]
-    [(list (list 'assignment var val) _) #t]
+    [(list '&&. cmd othercmd) #f]
+    [(list '||. cmd othercmd) #f]
+    [(list 'assignment var val) #t]
     [(list (list 'redirect source desc mode exp) _) #f]
     [(list 'spliced-parencmd cmd) #t]
     [(list 'parencmd cmd) #t]
@@ -2142,6 +2197,7 @@
 ;; gather across calls to gosh-file-compile
 
 (define (gosh-file-compile exp cont)
+  (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
   (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
@@ -2151,4 +2207,4 @@
         (pretty-print (simplify compiled)))
       compiled)))
 
-;;(trace gcomp gosh-compile)
+

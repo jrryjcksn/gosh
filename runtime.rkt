@@ -16,23 +16,44 @@
 (define module-name (make-parameter #f))
 (define .cmd-success (make-parameter #t))
 (define .throw-to-or. (make-parameter identity))
-(define .local-vars (make-parameter #f))
+(define .env (make-parameter
+              (let* ([e (current-environment-variables)]
+                     [names (environment-variables-names e)])
+                (apply hash
+                       (append-map
+                        (lambda (name)
+                          (let ([sname (bytes->string/locale name)])
+                            (list (string->symbol sname)
+                                  (bytes->string/locale
+                                   (environment-variables-ref e name)))))
+                        names)))))
+(define .dollar-q-box (box 0))
+(define .dollar-q-getter (make-parameter (lambda () (unbox .dollar-q-box))))
+(define .dollar-q-setter
+  (make-parameter (lambda (val) (set-box! .dollar-q-box val))))
+
+(define .free-vars (make-parameter (make-hash)))
 
 (define (.set-empty? x) (and (set? x) (set-empty? x)))
 (define (.hash-empty? x) (and (hash? x) (hash-empty? x)))
 
-(define $$ (getpid))
-(define $? 0)
+;; (define $$ (getpid))
+;; (define $? 0)
 (define .code-set #f)
 
-(define (set-code-set! val) (set! .code-set val))
-(define (set-dollar-q val) (set! $? val))
+(define (set-code-set! val) (hash-set! (.free-vars) '.code-set val))
+(define (set-dollar-q val) ((.dollar-q-setter) val))
+(define (get-dollar-q) ((.dollar-q-getter)))
 
 (define (adjust-return-code)
-  (if .code-set
-      (set! .code-set #f)
-      (set! $? 0))
-  $?)
+  (if (hash-ref (.free-vars) '.code-set #f)
+      (set-code-set! #f)
+      (set-dollar-q 0))
+  (get-dollar-q))
+
+(define (.look-up-free-var name)
+  (or (hash-ref (.env) name #f)
+      (hash-ref (.free-vars) name "")))
 
 (define .gosh-home
   (or (getenv "GOSH_HOME") (string-append (getenv "HOME") "/.gosh")))
@@ -1545,7 +1566,7 @@
                         (cdr (hash-ref function-defs name)))))))))
 
 (define (ensure-var-defined name)
-  (let ([local-names (.local-vars)]
+  (let ([local-names (.free-vars)]
         [var-defined? #t])
     (if local-names
         (let ([ref (hash-ref local-names name local-names)])
@@ -1845,7 +1866,7 @@
              (let ([ecode (proc 'exit-code)])
                (.cmd-success (= ecode 0))
                (set-code-set! #t)
-               (set! $? ecode))))
+               (set-dollar-q ecode))))
       (match-let* ([stdin (thread-cell-ref .stdin)]
                    [(list in-port out-port _ err-port proc)
                     (apply process*/ports #f (if stdin #f (current-input-port))
@@ -1868,7 +1889,7 @@
                        (let ([ecode (proc 'exit-code)])
                          (.cmd-success (= ecode 0))
                          (set-code-set! #t)
-                         (set! $? ecode))))))
+                         (set-dollar-q ecode))))))
 
 (define (.app-return fun arg)
   (lambda (cont) (when (fun arg) (cont arg))))
