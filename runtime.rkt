@@ -524,6 +524,11 @@
   (let ([chan (thread-cell-ref .stdin)])
     (and chan (async-channel-get chan))))
 
+(define (.sendin cont)
+  (let ([val (.in)])
+    (and (not (eq? val .channel-empty))
+         (begin (cont val) (.sendin cont)))))
+
 (define (.gosh-> x y) (and (> x y) y))
 (define (.gosh->= x y) (and (>= x y) y))
 (define (.gosh-< x y) (and (< x y) y))

@@ -18,7 +18,7 @@
            LOOP WITH HASHANON TO BY FROM &&> \|\|> IMPORT EXCEPT ONLY TRUE
            FALSE PIPEPIPE PIPEAMP = + - * / <. ^ ** // //* @ @* @: &+ & $ _ ::
            && &&. ||. &/ OR XOR ! != == > >= < <= ~ ~~ ~> <~ : :~> =! <! >! <?
-           >? >~ :! => -> <- -= += ++))
+           >? >~ :! => -> <- -= += ++ UPPIPEIN))
 
 (define-tokens value-tokens (NUM ATOM FUNKYATOM VAR STR CHAR ANON SEQVAR REGEX
                                  RACKET SIMPLERACKET SYMBOL))
@@ -115,6 +115,7 @@
        ("<." <.)
        ("|"  ,(token-PIPE))
        ("|>" ,(token-PIPEIN))
+       ("^|>" ,(token-UPPIPEIN))
        ("|&" ,(token-PIPEAMP))
        ("`"  ,(token-BQUOTE))
        ("."  ,(token-DOT))

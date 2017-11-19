@@ -922,7 +922,7 @@
                 (match $*
                        [,pat
                         ,@(compile-func-guard guard)
-                        ,(pipe-compile pipe exp cont-var)]
+                        ,(pipe-compile pipe exp #t cont-var)]
                        [_ #f]))
               (,cont ,gosh-name)))
          (let ([cont-var (gensym "cont-")]
@@ -933,7 +933,7 @@
                (match $*
                       [,pat
                        ,@(compile-func-guard guard)
-                       ,(pipe-compile pipe exp cont-var)]
+                       ,(pipe-compile pipe exp #t cont-var)]
                       [_ #f]))))))))
 
 (define (fun-str start end)
@@ -1268,7 +1268,7 @@
                               [,pat
                                ,@(compile-func-guard guard)
                                (when ,matched-var (vector-set! ,matched-var 0 #t))
-                               ,(pipe-compile pipe exp cont-var)]
+                               ,(pipe-compile pipe exp #f cont-var)]
                               [_ #f])
                        (,prev-var ,cont-var $* ,matched-var))])
                                         ;             (init-clause-name ',clause-name)
@@ -1294,7 +1294,7 @@
                                  [,pat
                                   ,@(compile-func-guard guard)
                                   (when ,matched-var (vector-set! ,matched-var 0 #t))
-                                  ,(pipe-compile pipe exp cont-var)]
+                                  ,(pipe-compile pipe exp #t cont-var)]
                                  [_ (,prev-var ,cont-var $* ,matched-var)]))])
                                         ;                 (init-clause-name ',clause-name)
                                         ;                 (set-func! ',clause-name ,clause)
@@ -1317,7 +1317,7 @@
                               [,pat
                                ,@(compile-func-guard guard)
                                (when ,matched-var (vector-set! ,matched-var 0 #t))
-                               ,(pipe-compile pipe exp cont-var)]
+                               ,(pipe-compile pipe exp #f cont-var)]
                               [_ #f]))])
                                         ;             (init-clause-name ',clause-name)
                                         ;             (set-func! ',clause-name ,clause)
@@ -1380,7 +1380,7 @@
                                        ,@(compile-func-guard guard)
                                        (when ,matched-var
                                              (vector-set! ,matched-var 0 #t))
-                                       ,(pipe-compile pipe exp cont-var)]
+                                       ,(pipe-compile pipe exp #f cont-var)]
                                       [_ #f]))))])
                                         ;               (init-clause-name ',clause-name)
                                         ;               (set-func! ',clause-name ,clause)
@@ -1409,7 +1409,7 @@
                                   [,pat
                                    ,@(compile-func-guard guard)
                                    (vector-set! ,matched-var 0 #t)
-                                   ,(pipe-compile pipe exp cont-var)]
+                                   ,(pipe-compile pipe exp #f cont-var)]
                                   [_ #f])))])
                 ,(wrap-clause name clause-name clause gosh-name start end)
                 (goshfun ,clause (get-defs ,prev-funobj
@@ -1420,32 +1420,68 @@
 
 (define (pipe-override-compile pipe exp success sarg-var cont-var)
   (if pipe
-      (compile-pipe-list exp pipe `(lambda (,sarg-var)
-                                     (set! ,success #t)
-                                     (,cont-var ,sarg-var)))
+      (compile-pipe-list exp pipe #f `(lambda (,sarg-var)
+                                        (set! ,success #t)
+                                        (,cont-var ,sarg-var)))
       (gcomp exp
              `(lambda (,sarg-var)
                 (set! ,success #t)
                 (,cont-var ,sarg-var)))))
 
-(define (pipe-compile pipe exp cont-var)
+(define (pipe-compile pipe exp is-bottom cont-var)
   (if pipe
-      (compile-pipe-list exp pipe cont-var)
+      (compile-pipe-list exp pipe is-bottom cont-var)
       (gcomp exp cont-var)))
 
-(define (compile-pipe-list arg pat cont)
-  (let* ([pipelist (new-arg)]
+(define (compile-pipe-list arg pat is-bottom cont)
+  (let* ([is-up #f]
+         [pipelist (new-arg)]
          [bindings (match-up-anon pipelist)])
-    `(let ([,pipelist (thread-cell-ref .pipelist)])
-       (unless
-        ,pipelist
-        (set! ,pipelist (.pipe-list ,(chunk))))
-       (let ,bindings
-         ,(if (eq? pat #t)
-              (gcomp arg cont)
-              `(match ,pipelist
-                      [,(translate-pattern pat) ,(gcomp arg cont)]
-                      [_ #f]))))))
+    (match pat
+           [(list 'up val)
+            (set! pat (second pat))
+            (set! is-up #t)]
+           [_ 'ok])
+    (if is-bottom
+        (if is-up
+            `(.sendin
+              (lambda (,pipelist)
+                (let ,bindings
+                  ,(if (eq? pat #t)
+                       (gcomp arg cont)
+                       `(match ,pipelist
+                               [,(translate-pattern pat) ,(gcomp arg cont)]
+                               [_ #f])))))
+            `(let ([,pipelist (thread-cell-ref .pipelist)])
+               (unless
+                ,pipelist
+                (set! ,pipelist (.pipe-list ,(chunk))))
+               (let ,bindings
+                 ,(if (eq? pat #t)
+                      (gcomp arg cont)
+                      `(match ,pipelist
+                              [,(translate-pattern pat) ,(gcomp arg cont)]
+                              [_ #f])))))
+        `(let ([,pipelist (thread-cell-ref .pipelist)])
+           (unless
+            ,pipelist
+            (set! ,pipelist (.pipe-list ,(chunk))))
+           ,(if is-up
+                `(.dot (lambda (,pipelist)
+                         (let ,bindings
+                           ,(if (eq? pat #t)
+                                (gcomp arg cont)
+                                `(match ,pipelist
+                                        [,(translate-pattern pat)
+                                         ,(gcomp arg cont)]
+                                        [_ #f]))))
+                       ,pipelist)
+                `(let ,bindings
+                   ,(if (eq? pat #t)
+                        (gcomp arg cont)
+                        `(match ,pipelist
+                                [,(translate-pattern pat) ,(gcomp arg cont)]
+                                [_ #f]))))))))
 
 (define (compile-func-guard guard)
   (if guard

@@ -317,6 +317,13 @@
 (ensure '(6 28) '("=! gorp[] -> 6" ">! gorp[] |> $x -> ^$x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(28) '("=! gorp[] -> 6" "<? gorp[] |> $x -> ^$x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(6) '("=! gorp[] -> 6" ">? gorp[] |> $x -> ^% * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
+(ensure '(6 28) '("=! fugu[] ^|> $x -> $x * 2" "(3||14) | fugu[]"))
+(ensure '(12 56) '("=! oom[] ^|> $x -> $x * 2" "(3||14) | oom[] | oom[]"))
+(ensure '(6) '("=! oomo[$x] ^|> -> % when % rem $x == 0" "(6||14||9) | oomo[3] | oomo[2]"))
+(ensure '(28 6) '("=! gorp[] -> 6" "<! gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
+(ensure '(6 28) '("=! gorp[] -> 6" ">! gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
+(ensure '(28) '("=! gorp[] -> 6" "<? gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
+(ensure '(6) '("=! gorp[] -> 6" ">? gorp[] ^|> $x -> % * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 ;; (ensure-shell '("checkpoint")
 ;;               "cat $(ls -df /home/jerry/.hg/hgrc /home/jerry/.hg/last-message.txt) | grep checkpoint")
 ;;                 ;; "result=$(cat /tmp/echotest)"

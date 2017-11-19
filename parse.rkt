@@ -277,6 +277,8 @@
            [() #f])
     (pipe [(PIPEIN pat ->) $2]
           [(PIPEIN ->) #t]
+          [(UPPIPEIN pat ->) `(up ,$2)]
+          [(UPPIPEIN ->) `(up #t)]
           [(->) #f])
     (function-clause-pop
      [(:! ATOM DOT) `(:! ,$2)])
