@@ -1444,24 +1444,38 @@
            [_ 'ok])
     (if is-bottom
         (if is-up
-            `(.sendin
-              (lambda (,pipelist)
-                (let ,bindings
-                  ,(if (eq? pat #t)
-                       (gcomp arg cont)
-                       `(match ,pipelist
-                               [,(translate-pattern pat) ,(gcomp arg cont)]
-                               [_ #f])))))
+            `(if (thread-cell-ref .semidetapp)
+                 (.sendin
+                  (lambda (,pipelist)
+                    (let ,bindings
+                      ,(if (eq? pat #t)
+                           (gcomp arg cont)
+                           `(match ,pipelist
+                                   [,(translate-pattern pat) ,(gcomp arg cont)]
+                                   [_ #f])))))
+                 (let ([,pipelist (thread-cell-ref .pipelist)])
+                   (unless
+                     ,pipelist
+                     (set! ,pipelist (.pipe-list ,(chunk))))
+                   (.dot (lambda (,pipelist)
+                           (let ,bindings
+                             ,(if (eq? pat #t)
+                                  (gcomp arg cont)
+                                  `(match ,pipelist
+                                          [,(translate-pattern pat)
+                                           ,(gcomp arg cont)]
+                                          [_ #f]))))
+                         ,pipelist)))
             `(let ([,pipelist (thread-cell-ref .pipelist)])
-               (unless
-                ,pipelist
-                (set! ,pipelist (.pipe-list ,(chunk))))
-               (let ,bindings
-                 ,(if (eq? pat #t)
-                      (gcomp arg cont)
-                      `(match ,pipelist
-                              [,(translate-pattern pat) ,(gcomp arg cont)]
-                              [_ #f])))))
+                    (unless
+                     ,pipelist
+                     (set! ,pipelist (.pipe-list ,(chunk))))
+                    (let ,bindings
+                      ,(if (eq? pat #t)
+                           (gcomp arg cont)
+                           `(match ,pipelist
+                                   [,(translate-pattern pat) ,(gcomp arg cont)]
+                                   [_ #f])))))
         `(let ([,pipelist (thread-cell-ref .pipelist)])
            (unless
             ,pipelist
@@ -1629,6 +1643,11 @@
                          (.cmd-success #t)
                          ,(gcomp othercmd cont)))))))))
 
+(define (is-semidet-app exp)
+  (match exp
+         [(list 'app _ e _) (semidet? e)]
+         [_ #f]))
+
 (define (compile-pipe item otherpipe err cont)
   (let ([chan (gensym "chan-")]
         [prev-thread (gensym "thread-")]
@@ -1647,8 +1666,11 @@
                 (lambda (err) (fprintf (current-error-port)
                                        "Error: ~a~%"
                                        (exn-message err)))])
-            (thread-cell-set! .stdin ,chan)
-            ,(gcomp otherpipe cont))
+              (thread-cell-set! .stdin ,chan)
+              ,(if (is-semidet-app otherpipe)
+                   `(begin (thread-cell-set! .semidetapp #t)
+                           ,(gcomp otherpipe cont))
+                   (gcomp otherpipe cont)))
           (set! ,cmd-success (.cmd-success))
           (thread-send ,prev-thread 'ok)))
        ,(if err

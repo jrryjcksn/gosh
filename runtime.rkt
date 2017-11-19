@@ -489,6 +489,7 @@
 
 (define .stdin (make-thread-cell #f))
 (define .pipelist (make-thread-cell #f))
+(define .semidetapp (make-thread-cell #f))
 
 (define .main-thread (make-parameter (current-thread)))
 
