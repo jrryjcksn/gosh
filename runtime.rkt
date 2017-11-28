@@ -688,7 +688,7 @@
            (if (or (and (> start-int stop-int) (positive? step))
                    (and (< start-int stop-int) (negative? step)))
                (gosh-arg-error "Bad iteration variables" (vector start step))
-               (if (> stop-int start-int)
+               (if (>= stop-int start-int)
                    (let loop ([n start-int])
                      (and (<= n stop-int)
                           (begin
@@ -703,7 +703,7 @@
          (if (or (and (> start stop) (positive? step))
                  (and (< start stop) (negative? step)))
              (gosh-arg-error "Bad iteration variables" (vector start step))
-             (if (> stop start)
+             (if (>= stop start)
                  (let loop ([n start])
                    (and (<= n stop)
                         (begin
