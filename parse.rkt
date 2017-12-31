@@ -1,9 +1,11 @@
-#lang racket
+#lang racket/base
 (require parser-tools/yacc
          parser-tools/lex
          "lex.rkt"
          racket/async-channel
-         racket/trace
+;         racket/trace
+         racket/match
+         racket/format
          (prefix-in : parser-tools/lex-sre))
 
 (provide (all-defined-out))
@@ -112,10 +114,6 @@
                                         (- column 2)
                                         (sub1 column))
                                     #\space)))
-
-(define (pppwrap . things-to-pprint)
-  (for ([item (in-list things-to-pprint)]) (pretty-print item))
-  (last things-to-pprint))
 
 (define parse
   (parser
@@ -538,7 +536,7 @@
     (set-tail [(RBRACE) '()]
               [(COMMA exp set-tail) (cons $2 $3)])
     (set-pat [(SBRACE set-pat-val)
-              (cond [(empty? $2) '(? .set-empty?)]
+              (cond [(null? $2) '(? .set-empty?)]
                     [(eq? $2 'dotdotdot) '(? set?)]
                     [else `(? ,(member-test-fun $2))])])
     (set-pat-val [(RBRACE) '()]
@@ -562,7 +560,7 @@
                [(COMMA assoc hash-tail) (cons $2 $3)])
     (hash-type [(& < ATOM > LBRACK hash-val) `(hash-type ,$3 ,@$6)])
     (hash-pat [(HBRACK hash-pat-val)
-               (cond [(empty? $2) '(? .hash-empty?)]
+               (cond [(null? $2) '(? .hash-empty?)]
                      [(eq? $2 'dotdotdot) '(? hash?)]
                      [else `(hash-table ,@$2)])])
     (hash-pat-val [(RBRACK) '()]
@@ -629,25 +627,25 @@
 
 (define (process-cmd-chain fun args tail)
   (define (process-tail app-exp tail-exp)
-    (cond [(empty? tail-exp) app-exp]
-          [(eq? (first tail-exp) 'redirect)
-           `(redirect ,app-exp ,@(rest tail-exp))]
-          [(eq? (first tail-exp) 'pipe)
-           `(pipeline ,app-exp ,(second tail-exp) #f)]
-          [(eq? (first tail-exp) 'pipeamp)
-           `(pipeline ,app-exp ,(second tail-exp) #t)]
-          [(eq? (first tail-exp) 'pipe-input)
-           (let* ([input-pipe `(file-input ,(second tail-exp))]
+    (cond [(null? tail-exp) app-exp]
+          [(eq? (car tail-exp) 'redirect)
+           `(redirect ,app-exp ,@(cdr tail-exp))]
+          [(eq? (car tail-exp) 'pipe)
+           `(pipeline ,app-exp ,(cadr tail-exp) #f)]
+          [(eq? (car tail-exp) 'pipeamp)
+           `(pipeline ,app-exp ,(cadr tail-exp) #t)]
+          [(eq? (car tail-exp) 'pipe-input)
+           (let* ([input-pipe `(file-input ,(cadr tail-exp))]
                   [piped-app `(pipeline ,input-pipe ,app-exp #f)])
-             (if (empty? (third tail-exp))
+             (if (null? (caddr tail-exp))
                  piped-app
-                 (process-tail piped-app (third tail-exp))))]))
-        ;; [(eq? (first tail-exp) '&&.)
-        ;;  `(&&. ,app-exp ,(second tail-exp))]
-        ;; [(eq? (first tail-exp) '||.)
-        ;;  `(||. ,app-exp ,(second tail-exp))]))
+                 (process-tail piped-app (caddr tail-exp))))]))
+        ;; [(eq? (car tail-exp) '&&.)
+        ;;  `(&&. ,app-exp ,(cadr tail-exp))]
+        ;; [(eq? (car tail-exp) '||.)
+        ;;  `(||. ,app-exp ,(cadr tail-exp))]))
   (define fun-app `(app ,fun (list ,@args) #t))
-  (cond [(and (empty? args) (empty? tail))
+  (cond [(and (null? args) (null? tail))
          (match fun
                 [(pregexp #px"^([[:word:]]+)=(.+)$" (list _ var val))
                  `(assignment ,var ,val)]
@@ -673,34 +671,34 @@
                                        `(bracketcmd (word-split ,x))]
                                       [_ val]))]
                 [_ fun-app])]
-        [(empty? tail)
+        [(null? tail)
          (match fun
                 [(pregexp #px"^([[:word:]]+)=$" (list _ var))
-                 `(assignment ,var ,(first args))]
+                 `(assignment ,var ,(car args))]
                 [(list 'strexps
                        (list (pregexp #px"^([[:word:]]+)=$"
                                       (list _ var))))
                  `(assignment ,var
-                              ,(match (first args)
+                              ,(match (car args)
                                       [(list 'paren x) `(parencmd ,x)]
                                       [(list 'bracket x) `(bracketcmd ,x)]
-                                      [_ (first args)]))]
+                                      [_ (car args)]))]
                 [(list 'word-split
                        (list 'atomexps
                              (list (pregexp #px"^([[:word:]]+)=$"
                                             (list _ var)))))
                  `(assignment ,var
-                              ,(match (first args)
+                              ,(match (car args)
                                       [(list 'paren x)
                                        `(parencmd (word-split ,x))]
                                       [(list 'bracket x)
                                        `(bracketcmd (word-split ,x))]
-                                      [_ (first args)]))]
+                                      [_ (car args)]))]
                 [_ fun-app])]
         [else (process-tail fun-app tail)]))
 
 (define (bindings->argpat bindings)
-  (if (empty? bindings)
+  (if (null? bindings)
       ''()
       (let ([pat (bindings->argpat (cdr bindings))])
         `(or (cons ,(caar bindings) ,pat)
@@ -722,12 +720,12 @@
     ,(let loop ([segs (map (compose1 translate-seg path-seg->string)
                            (explode-path pat))]
                 [res '()])
-       (cond [(empty? (rest segs))
+       (cond [(null? (cdr segs))
               (apply string-append (reverse (list* "$" (caar segs) res)))]
              [(cadar segs)
-              (loop (rest segs) (list* "/" (caar segs) res))]
+              (loop (cdr segs) (list* "/" (caar segs) res))]
              [else
-              (loop (rest segs) (cons (caar segs) res))]))))
+              (loop (cdr segs) (cons (caar segs) res))]))))
 
 (define (translate-seg seg)
   (match seg
@@ -739,10 +737,6 @@
                                   ["[.]" "\\\\."]))
              #t)]))
 
-(define (pp . things-to-pprint)
-  (for ([item (in-list things-to-pprint)]) (pretty-print item))
-  (last things-to-pprint))
-
 (define (extract-regexp-field-names pat)
   (log-regex-debug "PAT: ~s" pat)
   (let* ([port (if (regexp? pat)
@@ -752,18 +746,18 @@
                    (open-input-string (~a pat)))]
          [match-results (rparse (lambda () (rlex port)))]
          [vars (foldr (lambda (item acc)
-                        (if (eq? (first item) 'var)
-                            (cons (second item) acc)
+                        (if (eq? (car item) 'var)
+                            (cons (cadr item) acc)
                             acc))
                       '()
                       match-results)]
          [regex (apply string-append
                        `("^"
                          ,@(map (lambda (item)
-                                  (if (eq? (first item) 'var)
+                                  (if (eq? (car item) 'var)
                                       (string-append
-                                       "(" (quote-pars (third item)) ")")
-                                      (quote-pars (second item))))
+                                       "(" (quote-pars (caddr item)) ")")
+                                      (quote-pars (cadr item))))
                                 match-results)
                          "$"))])
     (values vars regex)))

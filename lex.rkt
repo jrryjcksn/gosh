@@ -1,7 +1,8 @@
-#lang racket
+#lang racket/base
 
 
-(require parser-tools/lex data/queue racket/trace)
+(require parser-tools/lex data/queue racket/trace racket/match racket/string
+         racket/port)
 
 (provide (except-out (all-defined-out)))
 ;(provide mllex)
@@ -37,13 +38,13 @@
       (let ([existing (hash-ref t char #f)])
         (if (>= i last-index)
             (if existing
-                (hash-set! t char (list (first existing) tok))
+                (hash-set! t char (list (car existing) tok))
                 (hash-set! t char (list #f tok)))
             (if existing
-                (if (first existing)
-                    (process-binding s (add1 i) (first existing) tok)
+                (if (car existing)
+                    (process-binding s (add1 i) (car existing) tok)
                     (let ([new-hash (make-hash)])
-                      (hash-set! t char (list new-hash (second existing)))
+                      (hash-set! t char (list new-hash (cadr existing)))
                       (process-binding s (add1 i) new-hash tok)))
                 (let ([new-hash (make-hash)])
                   (hash-set! t char (list new-hash #f))
@@ -149,8 +150,8 @@
     (let* ([char (string-ref str i)]
            [entry (hash-ref t char #f)])
       (if (>= i last-index)
-          (and entry (second entry))
-          (and entry (first entry) (lookup-aux (add1 i) (first entry))))))
+          (and entry (cadr entry))
+          (and entry (car entry) (lookup-aux (add1 i) (car entry))))))
   (lookup-aux 0 table))
 
 (define (lookup-longest str table)
@@ -254,7 +255,7 @@
      (car stack)
      (set! stack (cdr stack))))
 
-  (define (stack-empty?)
+  (define (stack-null?)
     (eq? stack '()))
 
   (define (push brack)
@@ -435,7 +436,7 @@
               (add1 (position-col pos))))
 
   (define (enter state-name ch . other-args)
-    (if (empty? other-args)
+    (if (null? other-args)
         (log-mllex-debug "ENTERING: ~s, ch = ~s" state-name ch)
         (log-mllex-debug "ENTERING: ~s, ch = ~s, other-args = ~s"
                          state-name ch other-args)))
@@ -1689,7 +1690,7 @@
          (require rackunit)
 
          ;; Generate a lexer on a string with a wrapper that allows the request
-         ;; of the first n tokens.
+         ;; of the car n tokens.
          ;; Example: ((tokgen "1 2 3" 'colon) 2) =>
          ;;          (<token <num 1>> <token <num 2>>)
          (define (tokgen item mode)
@@ -1706,13 +1707,13 @@
          (define (one-line-pos tok start end)
            (position-token tok (position start 1 start) (position end 1 end)))
 
-         ;; Compare the first 'count' tokens lexed from 'item' with the
+         ;; Compare the car 'count' tokens lexed from 'item' with the
          ;; tokens that are the remaining arguments in 'tokens'
          (define (check-toks item count . tokens)
            (log-mllex-debug "CHECKING: ~a" item)
            (check-equal? ((tokgen item 'colon) count) tokens))
 
-         ;; Compare the first 'count' tokens lexed from 'item' in str
+         ;; Compare the car 'count' tokens lexed from 'item' in str
          ;; mode with the tokens that are the remaining arguments in
          ;; 'tokens'
          (define (check-shell-toks item count . tokens)

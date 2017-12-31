@@ -1,9 +1,19 @@
-#lang racket
+#lang racket/base
 (require (except-in racket/control set) db
          "parse.rkt" "compile.rkt" "runtime.rkt"
-         racket/async-channel readline/readline racket/trace
-         (for-syntax "runtime.rkt") (for-syntax "compile.rkt")
-         compiler/cm  parser-tools/lex
+         racket/async-channel
+         readline/readline
+                                        ;racket/trace
+         (only-in racket/path path-only file-name-from-path)
+         racket/file (for-syntax "runtime.rkt") (for-syntax "compile.rkt")
+         racket/format
+         racket/match
+         (only-in racket/string string-replace string-prefix? string-contains?
+                  string-join)
+         compiler/cm
+         parser-tools/lex
+         (only-in racket/port with-output-to-string)
+         racket/set
          (prefix-in : parser-tools/lex-sre))
 
 (provide (all-defined-out))
@@ -61,11 +71,11 @@
                               (colon-wrap (string-append
                                            (~a (current-directory))
                                            ">")))])
-                          (colon-wrap (car (gcall prompt)))))))
+                          (colon-wrap (car (gcall 'prompt)))))))
 
 (define (flat-eval exp ns)
-  (if (eq? (first exp) 'begin)
-      (for-each (lambda (e) (flat-eval e ns)) (rest exp))
+  (if (eq? (car exp) 'begin)
+      (for-each (lambda (e) (flat-eval e ns)) (cdr exp))
       (eval exp ns)))
 
 (define (run-exp exp token-state)
@@ -120,12 +130,12 @@
           (current-namespace)))
   lib)
 
-(define (gosh-exec str)
-  (with-input-from-string str exec-impl))
+;; (define (gosh-exec str)
+;;   (with-input-from-string str exec-impl))
 
-(define (quiet-gosh-exec str ns)
-  (with-input-from-string str (lambda () (exec-impl ns)))
-  (values))
+;; (define (quiet-gosh-exec str ns)
+;;   (with-input-from-string str (lambda () (exec-impl ns)))
+;;   (values))
 
 (define (exec-impl [ns gosh-ns] [display #f])
   (let loop ([read-state 'default] [final-results '()])
@@ -134,7 +144,7 @@
       (parameterize
        ([current-exp-string exp])
        (cond [(eof-object? exp)
-              (if (empty? final-results)
+              (if (null? final-results)
                   (void)
                   (reverse final-results))]
              [(or (not exp) (equal? exp ""))
@@ -180,6 +190,119 @@
                                 (cons results final-results)
                                 final-results)))))])))))
 
+(define (gosh-exec [read-state 'default])
+  (define in (current-input-port))
+  (define out (current-output-port))
+  (adjust-return-code)
+  (let-values ([(exp token-state new-read-state)
+                (gosh-read in read-state)])
+    (cond [(eof-object? exp) 'done]
+          [(or (equal? exp "") (not exp)) (gosh-exec new-read-state)]
+          ;;       [(not exp) (repl-aux new-read-state in out)]
+          [#t
+           (let ([cust (make-custodian)]
+                 [is-assignment? #f]) ; if x=<exp>, don't kill custodian
+             (parameterize
+              [(current-custodian cust)
+               (current-directory .pwd)
+               (current-exp-string exp)]
+              (local-custodian cust)
+              (with-handlers
+               ([exn?
+                 (lambda (err)
+                   (log-error "ERROR: ~a~%" (exn-message err)))])
+               (let ([parsed (gosh exp token-state)])
+                 (if parsed
+                     (parameterize ([compile-allow-set!-undefined #t]
+                                    [.gosh-loader gosh-load]
+;                                    [.gosh-executer gosh-exec]
+                                    [.gosh-compiler compile-gosh-file]
+                                    [gosh-namespace (current-namespace)]
+                                    [.cmd-success #t])
+                                   (match parsed
+                                          [(list 'assignment _ _)
+                                           (set! is-assignment? #t)]
+                                          [_ #t])
+                                   (flat-eval
+                                    (gosh-compile
+                                     parsed
+                                     .default-cont)
+                                    (current-namespace)))
+                     (void))))
+              (unless is-assignment?
+                      (custodian-shutdown-all cust)
+                      (local-custodian #f)))
+             (gosh-exec new-read-state))])))
+
+;; (define (gosh-exec [read-state 'default])
+;;   (define in (current-input-port))
+;;   (define out (current-output-port))
+;;     (printf "HERE0!\n")
+;;   (adjust-return-code)
+;;   (let-values ([(exp token-state new-read-state)
+;;                 (gosh-read in read-state)])
+;;     (printf "HERE1!\n")
+;;     (cond [(eof-object? exp) 'done]
+;;           [(or (equal? exp "") (not exp)) (gosh-exec new-read-state)]
+;;           ;;       [(not exp) (repl-aux new-read-state in out)]
+;;           [#t
+;;            (let ([cust (make-custodian)]
+;;                  [is-assignment? #f]) ; if x=<exp>, don't kill custodian
+;;              (parameterize
+;;               [(current-custodian cust)
+;;                (current-directory .pwd)
+;;                (current-exp-string exp)]
+;;               (local-custodian cust)
+;;               (thread
+;;                (lambda ()
+;;                  (with-handlers
+;;                   ([exn?
+;;                     (lambda (err)
+;;                       (reset-toplevel-channel!)
+;;                       (log-error "ERROR: ~a~%" (exn-message err))
+;;                       (async-channel-put .toplevel-chan .channel-empty))])
+;;                   (let ([parsed (gosh exp token-state)])
+;;                     (if parsed
+;;                         (parameterize ([compile-allow-set!-undefined #t]
+;;                                        [.gosh-loader gosh-load]
+;;                                        [.gosh-executer gosh-exec]
+;;                                        [.gosh-compiler compile-gosh-file]
+;;                                        [gosh-namespace (current-namespace)]
+;;                                        [.cmd-success #t])
+;;                                       (match parsed
+;;                                              [(list 'assignment _ _)
+;;                                               (set! is-assignment? #t)]
+;;                                              [_ #t])
+;;                                       (flat-eval
+;;                                        (gosh-compile
+;;                                         parsed
+;;                                         (cont-for-read-state token-state))
+;;                                        (current-namespace))
+;;                                       (async-channel-put .toplevel-chan
+;;                                                          .channel-empty))
+;;                         (async-channel-put .toplevel-chan
+;;                                            .channel-empty)))))))
+;;              (let loop ([val (async-channel-get .toplevel-chan)])
+;;                (when (not (eq? val .channel-empty))
+;;                      (if (and (eq? token-state 'default) (string? val))
+;;                          (fprintf out "~a" val)
+;;                          (.gosh-fprint out val))
+;;                      (cond [(and (eq? token-state 'colon) (not (.loading)))
+;;                             (printf "? ")
+;;                             (let ([input-val (read-line in)])
+;;                               (semaphore-post .toplevel-semaphore)
+;;                               (if (equal? input-val ";")
+;;                                   (loop (async-channel-get .toplevel-chan))
+;;                                   (reset-toplevel-channel!)))]
+;;                            [#t
+;;                             (newline out)
+;;                             (semaphore-post .toplevel-semaphore)
+;;                             (loop (async-channel-get .toplevel-chan))])))
+;;              (unless is-assignment?
+;;                      (custodian-shutdown-all cust)
+;;                      (local-custodian #f)))
+;;            (gosh-exec new-read-state)])))
+
 (define (clean-path path)
   (path->complete-path (simplify-path path)))
 
@@ -193,9 +316,9 @@
       (make-directory* (path-only sym-file)))
     (parameterize [(module-being-compiled (clean-path gosh-file))]
       (with-input-from-file gosh-file
-        (thunk (with-output-to-file racket-file
-                 (thunk (compile-forms gosh-file sym-file))
-                 #:exists 'replace))))))
+        (lambda () (with-output-to-file racket-file
+                     (lambda () (compile-forms gosh-file sym-file))
+                     #:exists 'replace))))))
 
 (define (sym-path path-str)
   (let* ([home (getenv "HOME")]
@@ -230,7 +353,7 @@
                               #t)))
 
 (define (process-import import)
-  (if (and (pair? import) (eq? (first import) 'import))
+  (if (and (pair? import) (eq? (car import) 'import))
       (begin
         (imports (cons import (imports)))
         #t)
@@ -304,14 +427,14 @@
              (rmodname name)]
             [(list 'import name (list 'only syms))
              `(only-in ,(rmodname name)
-                       ,@(append-map name-pair syms))]
+                       ,@(apply append (map name-pair syms)))]
             [(list 'import name (list 'except syms))
              `(combine-in
                (except-in ,(rmodname name)
                           ,@(foldl (lambda (val acc)
                                      (if (string? val)
                                          (append (name-pair val) acc)
-                                         (append (name-pair (first val)) acc)))
+                                         (append (name-pair (car val)) acc)))
                                    '()
                                    syms))
                (rename-in ,(rmodname name)
@@ -342,11 +465,16 @@
 
 (define (partition-excepts syms)
   (let loop ([slist syms] [skip '()] [rename '()])
-    (if (empty? slist)
+    (if (null? slist)
         (values skip rename)
-        (if (pair? (first slist))
-            (loop (rest slist) skip (cons (first slist) rename))
-            (loop (rest slist) (cons (first slist) skip) rename)))))
+        (if (pair? (car slist))
+            (loop (cdr slist) skip (cons (car slist) rename))
+            (loop (cdr slist) (cons (car slist) skip) rename)))))
+
+(define (flatten x)
+  (cond [(null? x) '()]
+        [(pair? x) (append (flatten (car x)) (flatten (cdr x)))]
+        [else (list x)]))
 
 (define (modsyms-except modname syms)
   (define mod (relative-mod-path modname))
@@ -357,7 +485,7 @@
             "select * from module_symbols where mod = '"
             mod
             "' and name not in "
-            (make-query-sym-list (append skip (map first rename))))))
+            (make-query-sym-list (append skip (map car rename))))))
      (let ([shash (apply hash (flatten rename))])
        (map (lambda (vec)
               (match vec
@@ -367,27 +495,28 @@
             (gqr
              (string-append
               "select * from module_symbols where name in "
-              (make-query-sym-list (map first rename))
+              (make-query-sym-list (map car rename))
               " and mod = '" mod "'")))))))
 
 
 (define (make-query-sym-list syms)
-  (if (empty? syms)
+  (if (null? syms)
       "()"
       (with-output-to-string
-        (thunk (printf "('~a'" (first syms))
-               (for-each (lambda (s) (printf ", '~a'" s)) (rest syms))
-               (display ")")))))
+        (lambda ()
+          (printf "('~a'" (car syms))
+          (for-each (lambda (s) (printf ", '~a'" s)) (cdr syms))
+          (display ")")))))
 
 (define (lookup-mod-sym s name)
   (if (pair? s)
       (let ([row
              (gqrow
               "select * from module_symbols where name=? and mod=?"
-              (first s) name)])
+              (car s) name)])
         (match row
                [(vector _ mod basename basemod)
-                (list (second s) mod basename basemod)]))
+                (list (cadr s) mod basename basemod)]))
       (match (gqrow "select * from module_symbols where name=? and mod=?"
                     s name)
              [(vector _ mod basename basemod)
@@ -397,12 +526,12 @@
 
 (define (gather-gosh-imports imports)
   (define (gather imps syms)
-    (if (empty? imps)
+    (if (null? imps)
         syms
         (append
          syms
-         (gather (rest imps)
-                 (match (first imps)
+         (gather (cdr imps)
+                 (match (car imps)
                         [(list 'import name 'all)
                          (all-mod-syms (gosh-name name))]
                         [(list 'import name (list 'only osyms))
@@ -419,10 +548,10 @@
 (define (translate-imports imports)
   (let ([symset (set)])
     (let loop ([imps imports] [s symset])
-      (if (empty? imps)
+      (if (null? imps)
           s
-          (loop (rest imps)
-                (match (first imps)
+          (loop (cdr imps)
+                (match (car imps)
                        [(list rawname mod basename basemod)
                         (let ([name (string-append ".." rawname)])
                           (set-add (if (equal? mod basemod)
@@ -434,19 +563,19 @@
 (define (check-conflicts imported-syms)
   (let ([symmap (make-hash)])
     (let loop ([syms imported-syms])
-      (if (empty? syms)
+      (if (null? syms)
           imported-syms
           (begin
-            (match (first syms)
+            (match (car syms)
                    [(list name mod basename basemod)
                     (let ([existing (hash-ref symmap name #f)])
                       (match existing
                              [(list _ emod ebasename ebasemod)
                               (unless (and (equal? basename ebasename)
                                            (equal? basemod ebasemod))
-                                      (mismatch-error (first syms) existing))]
-                             [#f (hash-set! symmap name (first syms))]))])
-            (loop (rest syms)))))))
+                                      (mismatch-error (car syms) existing))]
+                             [#f (hash-set! symmap name (car syms))]))])
+            (loop (cdr syms)))))))
 
 (define (mismatch-error sym prevsym)
   (match (vector sym prevsym)
@@ -463,39 +592,43 @@
 
 (define (gather-imported-syms imports)
   (define (gather imps syms)
-    (if (empty? imps)
+    (if (null? imps)
         syms
         (set-union
          syms
          (gather
-          (rest imps)
-          (match (first imps)
+          (cdr imps)
+          (match (car imps)
                  [(list 'import name 'all)
                   (apply set (modsyms (rmodname name)))]
                  [(list 'import name (list 'only osyms))
                   (apply set
-                         (append-map
-                          (lambda (s)
-                            (let ([rname
-                                   (gnamestr (if (pair? s) (second s) s))])
-                              (list rname (setter-name rname))))
-                          osyms))]
+                         (apply
+                          append
+                          (map
+                           (lambda (s)
+                             (let ([rname
+                                    (gnamestr (if (pair? s) (cadr s) s))])
+                               (list rname (setter-name rname))))
+                           osyms)))]
                  [(list 'import name (list 'except syms))
                   (let ([module-syms
                          (set-subtract
                           (apply set (modsyms (rmodname name)))
                           (apply set
-                                 (append-map
-                                  (lambda (s)
-                                    (let ([rname
-                                           (gnamestr
-                                            (if (pair? s) (first s) s))])
-                                      (list rname (setter-name rname))))
-                                  syms)))])
+                                 (apply
+                                  append
+                                  (map
+                                   (lambda (s)
+                                     (let ([rname
+                                            (gnamestr
+                                             (if (pair? s) (car s) s))])
+                                       (list rname (setter-name rname))))
+                                   syms))))])
                     (foldl
                      (lambda (val acc)
                        (if (pair? val)
-                           (let ([rname (gnamestr (second val))])
+                           (let ([rname (gnamestr (cadr val))])
                              (set-add (set-add acc rname) (setter-name rname)))
                            acc))
                      module-syms
@@ -562,7 +695,7 @@
                               (loop new-read-state)))]))))))))
 
 (define (compile-forms mod syms)
-  (display "#lang racket")
+  (display "#lang racket/base")
   (newline)
   (parameterize [(exports (set))
                  (imports '())
@@ -616,13 +749,19 @@
                            (list->set (map ~a exported-sym-list)))
                 (apply set (set-map imported-syms ~a))))]
              [locally-defined
-              (append-map
-               (lambda (e)
-                 (if (set-member? imported-syms (symbol->string e))
-                     '()
-                     (list e)))
-               exported-sym-list)])
-        (write `(require (file "/home/jerry/gosh/runtime.rkt")
+              (apply
+               append
+               (map
+                (lambda (e)
+                  (if (set-member? imported-syms (symbol->string e))
+                      '()
+                      (list e)))
+                exported-sym-list))])
+      (write `(require racket/match
+                       (only-in racket/set set? set-count)
+                       (only-in racket/string string-trim)
+                       (only-in racket/port with-output-to-string)
+                       (file "/home/jerry/gosh/runtime.rkt")
                          (file "/home/jerry/gosh/toplevel.rkt")
 ;;                         (file "/home/jerry/gosh/pcomb.rkt")
                          ,@(if (equal? (path->string (module-being-compiled))
@@ -658,7 +797,7 @@
         (let ([modpath (gosh-mod-path mod)])
           (call-with-transaction
            .gosh-db
-           (thunk
+           (lambda ()
             (gqe .modsym-clear modpath)
             (for-each
              (lambda (sym)
@@ -683,36 +822,6 @@
       sym mod)
      0))
 
-;; (define (compile-forms)
-;;   (let loop ([read-state 'default] [final-results '()])
-;;     (let-values ([(exp token-state new-read-state)
-;;                   (gosh-read (current-input-port) read-state)])
-;;       (parameterize
-;;        ([current-exp-string exp])
-;;        (cond [(eof-object? exp)
-;;               (if (empty? final-results)
-;;                   (void)
-;;                   (reverse final-results))]
-;;              [(or (not exp) (equal? exp ""))
-;;               (loop new-read-state final-results)]
-;;              [#t (let ([ec (gensym "ec-")] [results '()])
-;;                    (with-handlers
-;;                     ([exn?
-;;                       (lambda (err)
-;;                         (printf "Error executing ~s: ~s~%" exp err))])
-;;                     (let* ([parsed (gosh exp token-state)])
-;;                       (parameterize
-;;                           ([current-namespace gosh-ns]
-;;                            [gosh-namespace gosh-ns])
-;;                         (write
-;;                          (gosh-compile
-;;                           parsed
-;;                           '(lambda ignore (void)))))
-;;                       (loop new-read-state
-;;                             (if (and results (not (void? results)))
-;;                                 (cons results final-results)
-;;                                 final-results)))))])))))
-
 (define histlex
   (lexer [(:* (complement (:: (:* (:~ "!")) "!" (complement " ")))) lexeme]
          [(:: "!" (:or "!"
@@ -734,10 +843,10 @@
 (define (hist-expand str)
   (let ([chunks (hist-chunks str)])
     (let loop ([c chunks] [rep-chunks '()])
-      (if (empty? c)
+      (if (null? c)
           (apply string-append (reverse rep-chunks))
-          (let ([hchunk (hist-replace (first c))])
-            (and hchunk (loop (rest c) (cons hchunk rep-chunks))))))))
+          (let ([hchunk (hist-replace (car c))])
+            (and hchunk (loop (cdr c) (cons hchunk rep-chunks))))))))
 
 (define (hist-replace-num hist numstr pos low high)
   (let ([num (string->number numstr)])
@@ -747,34 +856,40 @@
                                        (if pos num (- (length hist) num))))
              ""]
             [(<= index 0)
-             (let ([fhist (first h)])
+             (let ([fhist (car h)])
                (hist-value fhist (hist-range fhist low high)))]
-             [else (loop (rest h) (sub1 index))]))))
+             [else (loop (cdr h) (sub1 index))]))))
 
 (define (hist-replace-prefix hist str low high)
   (let loop ([h hist])
-    (cond [(empty? h)
+    (cond [(null? h)
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
-          [(string-prefix? (hist-record-str (first h)) str)
-           (hist-value (first h) (hist-range (first h) low high))]
-          [else (loop (rest h))])))
+          [(string-prefix? (hist-record-str (car h)) str)
+           (hist-value (car h) (hist-range (car h) low high))]
+          [else (loop (cdr h))])))
 
 (define (hist-replace-contains hist str low high)
   (let loop ([h hist])
-    (cond [(empty? h)
+    (cond [(null? h)
            (top-level-eprint (format "No such event: ~s~%" str))
            ""]
-          [(string-contains? (hist-record-str (first h)) str)
-           (hist-value (first h) (hist-range (first h) low high))]
-          [else (loop (rest h))])))
+          [(string-contains? (hist-record-str (car h)) str)
+           (hist-value (car h) (hist-range (car h) low high))]
+          [else (loop (cdr h))])))
+
+(define (take l n)
+  (let loop ([lyst l] [count n] [res '()])
+    (if (<= count 0)
+        (reverse res)
+        (loop (cdr lyst) (sub1 count) (cons (car lyst) res)))))
 
 (define (hist-value rec range)
   (let* ([str (hist-record-str rec)]
          [pieces (hist-record-pieces rec)]
          [num-pieces (length pieces)]
-         [low (first range)]
-         [high (second range)])
+         [low (car range)]
+         [high (cadr range)])
     (or
      (and (<= low high)
           (< high num-pieces)
@@ -782,8 +897,8 @@
             (string-join
              (map (lambda (ref)
                     (substring str
-                               (sub1 (position-offset (first ref)))
-                               (sub1 (position-offset (second ref)))))
+                               (sub1 (position-offset (car ref)))
+                               (sub1 (position-offset (cadr ref)))))
                   refs)
              " ")))
      (begin
@@ -802,8 +917,8 @@
           [else (string->number l)]))
   (define hnum
     (cond [(null? h) lnum]
-          [(equal? (first h) "$") (sub1 num-pieces)]
-          [else (string->number (first h))]))
+          [(equal? (car h) "$") (sub1 num-pieces)]
+          [else (string->number (car h))]))
   (list lnum hnum))
 
 (define (hist-replace str)
@@ -811,16 +926,16 @@
     (if (null? hist)
         str
         (match str
-               ["!!" (if (null? hist) str (hist-record-str (first hist)))]
+               ["!!" (if (null? hist) str (hist-record-str (car hist)))]
                [(pregexp #px"^![!]?:([0-9]+|[$^])$" (list _ numstr))
-                (let ([fhist (first hist)])
+                (let ([fhist (car hist)])
                   (hist-value fhist (hist-range fhist numstr)))]
                [(pregexp #px"^![!]?:([0-9]+|[$^])[-]([0-9]+|[$^])$"
                          (list _ lnumstr hnumstr))
-                (let ([fhist (first hist)])
+                (let ([fhist (car hist)])
                   (hist-value fhist (hist-range fhist lnumstr hnumstr)))]
                [(pregexp #px"^![!]?:[*]$" (list _))
-                (let ([fhist (first hist)])
+                (let ([fhist (car hist)])
                   (hist-value fhist (hist-range fhist "*")))]
                [(pregexp #px"^![-]([0-9]+)$" (list _ numstr))
                 (hist-replace-num hist numstr #f "0" "$")]
@@ -923,6 +1038,7 @@
                     (if parsed
                         (parameterize ([compile-allow-set!-undefined #t]
                                        [.gosh-loader gosh-load]
+;                                       [.gosh-executer gosh-exec]
                                        [.gosh-compiler compile-gosh-file]
                                        [gosh-namespace (current-namespace)]
                                        [.cmd-success #t])
@@ -984,26 +1100,6 @@
                         (loop (cons (string-append next-line "\n") lines)
                               (read-line port)))))]
              [else (values line 'default 'default)]))]
-    ;; [(default)
-    ;;  (let ([line (read-line port)])
-    ;;    (cond [(or (eof-object? line) (= 0 (string-length line)))
-    ;;           (values line 'default 'default)]
-    ;;          [(eqv? (string-ref line 0) #\:)
-    ;;           (if (eqv? (string-length line) 1)
-    ;;               (values #f 'colon 'colon)
-    ;;               (let loop ([lines '()] [next-line line])
-    ;;                 (if (or (eof-object? next-line)
-    ;;                         (eqv? (string-ref next-line
-    ;;                                           (sub1 (string-length next-line)))
-    ;;                               #\.))
-    ;;                     (values
-    ;;                      (apply string-append
-    ;;                             (reverse (cons next-line lines)))
-    ;;                      'colon
-    ;;                      'default)
-    ;;                     (loop (cons (string-append next-line "\n") lines)
-    ;;                           (read-line port)))))]
-    ;;          [else (values line 'default 'default)]))]
     [(colon)
      (let ([line (read-line port)])
        (cond [(eof-object? line) (values line 'default)]

@@ -18,10 +18,10 @@
 
 :=! history[] ->
     {; (let loop ([hist (reverse .history)] [index 1])
-          (if (empty? hist)
+          (if (null? hist)
               (void)
-              (begin (printf "~s ~a\n" index (hist-record-str (first hist)))
-                     (loop (rest hist) (add1 index))))) ;}.
+              (begin (printf "~s ~a\n" index (hist-record-str (car hist)))
+                     (loop (cdr hist) (add1 index))))) ;}.
 
 # # flush the cache of already loaded modules (when something about the
 # # runtime changes).
@@ -135,7 +135,7 @@
       pwd[]) ~> $dir in "$dir> ".
 :=! compile[$infile] -> {; ((.gosh-compiler) $infile) ;}.
 :=! chdir[_] -> ok.
-:=! permutation[$l] -> ^{; (permutations (mlist->list $l)) ;}.
+#:=! permutation[$l] -> ^{; (permutations (mlist->list $l)) ;}.
 :=! random[$n] -> {; (random $n) ;}.
 :=! printf $args -> {; (mapply printf $args) ;}.
 :=! pp[$item] -> {; (let ([inf (/ 1.0 0.0)]) (parameterize [(.print-length inf) (.print-depth inf)] (.gosh-print $item) (newline))) ;}.
@@ -232,13 +232,13 @@
 :=! connect[] ->
     {; (virtual-connection
          (connection-pool
-           (thunk (sqlite3-connect
-                   #:database 'memory #:use-place #t #:mode 'create)))) ;}.
+           (lambda () (sqlite3-connect
+                       #:database 'memory #:use-place #t #:mode 'create)))) ;}.
 :=! connect[$db] ->
     {; (virtual-connection
          (connection-pool
-           (thunk (sqlite3-connect
-                   #:database $db #:use-place #t #:mode 'create)))) ;}.
+           (lambda () (sqlite3-connect
+                       #:database $db #:use-place #t #:mode 'create)))) ;}.
 :=! query[$conn, $qstr . $params] ->
     {; (mapply query-rows (mcons $conn (mcons $qstr (.as-mlist $params)))) ;}.
 :=! exec[$conn, $str . $params] ->

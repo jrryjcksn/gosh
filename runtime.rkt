@@ -1,9 +1,21 @@
-#lang racket
+#lang racket/base
 
-(require rackunit (except-in racket/control set)
-         racket/async-channel racket/trace
-         racket/generator db
-         racket/mpair "parse.rkt" "lex.rkt" mzlib/os racket/set)
+(require ;rackunit
+         (except-in racket/control set)
+         racket/async-channel ;racket/trace
+         racket/generator
+         racket/format
+         (only-in racket/port with-output-to-string)
+;         racket/pretty
+         db
+         racket/mpair "parse.rkt" "lex.rkt"
+         ;mzlib/os
+         (only-in racket/system system process*/ports)
+         racket/set
+         racket/match
+         (only-in racket/string string-prefix? string-join
+                  string-replace string-append* string-split)
+         )
 
 (provide (all-defined-out)
          extract-regexp-field-names
@@ -15,18 +27,20 @@
 
 (define module-name (make-parameter #f))
 (define .cmd-success (make-parameter #t))
-(define .throw-to-or. (make-parameter identity))
+(define .throw-to-or. (make-parameter (lambda (x) x)))
 (define .env (make-parameter
               (let* ([e (current-environment-variables)]
                      [names (environment-variables-names e)])
                 (apply hash
-                       (append-map
-                        (lambda (name)
-                          (let ([sname (bytes->string/locale name)])
-                            (list (string->symbol sname)
-                                  (bytes->string/locale
-                                   (environment-variables-ref e name)))))
-                        names)))))
+                       (apply
+                        append
+                        (map
+                         (lambda (name)
+                           (let ([sname (bytes->string/locale name)])
+                             (list (string->symbol sname)
+                                   (bytes->string/locale
+                                    (environment-variables-ref e name)))))
+                         names))))))
 (define .dollar-q-box (box 0))
 (define .dollar-q-getter (make-parameter (lambda () (unbox .dollar-q-box))))
 (define .dollar-q-setter
@@ -65,7 +79,7 @@
 (define (.connect db)
   (virtual-connection
    (connection-pool
-    (thunk (sqlite3-connect #:database db #:mode 'create)))))
+    (lambda () (sqlite3-connect #:database db #:mode 'create)))))
 
 (define .gosh-db #f)
 
@@ -104,7 +118,7 @@
 (define (.set-up-gosh-db)
   (call-with-semaphore
    .gosh-db-sem
-   (thunk
+   (lambda ()
     (with-handlers
      ([exn? (lambda (err)
               (.populate-gosh-db)
@@ -128,29 +142,39 @@
             (substring s 0 num))))
   (constrain str))
 
-(define-syntax gcall
-  (lambda (stx)
-    (let* ([exp (syntax->datum stx)] [fun (cadr exp)] [res (gensym "result")]
-           [debugging (gensym "debugging-")])
-      (datum->syntax
-       stx
-       `(eval
-         '(let ([,res '()] [,debugging .debugging])
-            (.nodebug)
-            ,(list (string->symbol
-                    (string-append ".."
-                                   (symbol->string fun)))
-                   `(lambda (x) (set! ,res (cons x ,res)))
-                   `(list ,@(cddr exp)))
-            (when ,debugging (.debug))
-            (reverse ,res))
-         (current-namespace))))))
+(define (gcall fun)
+  (let ([result '()] [debugging .debugging]
+        [actual-fun (string->symbol
+                     (string-append ".." (symbol->string fun)))])
+    (.nodebug)
+    ((namespace-variable-value actual-fun (current-namespace))
+     (lambda (x) (set! result (cons x result)))
+     '())
+    (when debugging (.debug))
+    (reverse result)))
+
+;; (define-syntax (gcall stx)
+;;   (let* ([exp (syntax->datum stx)] [fun (cadr exp)] [res (gensym "result")]
+;;          [debugging (gensym "debugging-")])
+;;     (datum->syntax
+;;      stx
+;;      `(eval
+;;        '(let ([,res '()] [,debugging .debugging])
+;;           (.nodebug)
+;;           ,(list (string->symbol
+;;                   (string-append ".."
+;;                                  (symbol->string fun)))
+;;                  `(lambda (x) (set! ,res (cons x ,res)))
+;;                  `(list ,@(cddr exp)))
+;;           (when ,debugging (.debug))
+;;           (reverse ,res))
+;;        (current-namespace)))))
 
 (define .pwd (~a (current-directory)))
 (define .oldpwd "/")
 
 (define (.cd cont args)
-  (let* ([new-dir (if (empty? args) (getenv "HOME") (.ghead args))]
+  (let* ([new-dir (if (null? args) (getenv "HOME") (.ghead args))]
          [dir-string (cond [(symbol? new-dir) (~a new-dir)]
                            [(string? new-dir) new-dir]
                            [else
@@ -165,7 +189,7 @@
             (cont dir-path)))
         (gosh-arg-error "No such directory" dir-string))))
 
-(define (update-oldpwd) (set! .oldpwd .pwd) (gcall chdir))
+(define (update-oldpwd) (set! .oldpwd .pwd) (gcall 'chdir))
 
 (define (.install-shell-lookup name)
   (unless (hash-ref function-clauses name #f)
@@ -181,7 +205,7 @@
                        (symbol->string cmd)
                        cmd)])
     (lambda (cont args . matchtail)
-      (when (not (empty? matchtail))
+      (when (not (null? matchtail))
             (let ([matched? (car matchtail)])
               (when matched? (vector-set! matched? 0 #t))))
       (let ([path (find-executable-path canonical)])
@@ -193,36 +217,19 @@
       (invoke-executable path args cont)))
 
 (define (run-script path args cont)
-  (let ([ns (make-base-namespace)])
-    (namespace-attach-module gosh-ns 'racket ns)
-    (namespace-attach-module gosh-ns 'racket/control ns)
-    (namespace-attach-module gosh-ns 'racket/mpair ns)
-    (namespace-attach-module gosh-ns 'racket/set ns)
-    (namespace-attach-module gosh-ns "parse.rkt" ns)
-    (namespace-attach-module gosh-ns "runtime.rkt" ns)
-    (namespace-attach-module gosh-ns "compile.rkt" ns)
-    (namespace-attach-module gosh-ns "bi.rkt" ns)
-    (namespace-attach-module gosh-ns "toplevel.rkt" ns)
-;    (namespace-attach-module gosh-ns "defs.rkt" ns)
-;    (namespace-attach-module gosh-ns "gosh/compile.rkt" ns)
-;    (namespace-attach-module gosh-ns "gosh/builtins.rkt" ns)
-    (parameterize [(current-namespace ns)
-                   (gosh-namespace ns)]
-                  (namespace-require 'racket)
-                  (namespace-require 'racket/control)
-                  (namespace-require 'racket/mpair)
-                  (namespace-require 'racket/set)
-;                  (namespace-require "parse.rkt")
-                  (namespace-require/copy "runtime.rkt")
-                  (namespace-require "compile.rkt")
-                  (namespace-require/copy "bi.rkt")
-                  (namespace-require/copy "toplevel.rkt")
-;                  (namespace-require/copy "defs.rkt")
-;                  (namespace-require "gosh/compile.rkt")
-;                  (namespace-require/copy "builtins.rkt")
-;                  (eval '(load-builtins) ns)
-                  (init-script-variables path args)
-                  (.load cont (path->string (simplify-path path)) #t))))
+  (let ([first-line (with-input-from-file path read-line)])
+    (if (string-prefix? first-line "#!")
+        (invoke-executable
+         (string-append (substring first-line 2) path args cont))
+        (let ([ns (make-base-namespace)])
+          (parameterize [(current-namespace ns)]
+                        (namespace-require 'racket/match)
+                        (namespace-require
+                         '(file "/home/jerry/gosh/gosh.rkt"))
+                        (init-script-variables path args)
+                      (with-input-from-file
+                          (path->string (simplify-path path))
+                        (lambda () (.exec cont))))))))
 
 (define (.set-up-external-prog-lookup! namestr)
   (define name (string->symbol namestr))
@@ -249,17 +256,17 @@
                      [level-fun (.set-tracelevel level)])
                 (.trace-call (goshfun-name-str self) args cont)
                 (dynamic-wind
-                  level-fun
-                  (lambda ()
-                    ((.set-tracelevel (add1 level)))
-                ((goshfun-fun self)
-                 (lambda (val)
-                   (level-fun)
-                   (.trace-exit (goshfun-name-str self) args val cont
-                                level-fun))
-                 args
-                 #f))
-              (lambda () (void)))
+                    level-fun
+                    (lambda ()
+                      ((.set-tracelevel (add1 level)))
+                      ((goshfun-fun self)
+                       (lambda (val)
+                         (level-fun)
+                         (.trace-exit (goshfun-name-str self) args val cont
+                                      level-fun))
+                       args
+                       #f))
+                    (lambda () (void)))
                 (level-fun)
                 (.trace-fail (goshfun-name-str self) (goshfun-gosh-name self)
                              args cont))
@@ -281,7 +288,8 @@
         (lambda (self cont args)
           (match (regexp-match (gregexp-re self) (.ghead args))
                  [(list-rest _ vals)
-                  (let ([results (append-map list (gregexp-vars self) vals)])
+                  (let ([results (apply append
+                                        (map list (gregexp-vars self) vals))])
                     (and results (cont (apply hash results))))]
                  [_ #f])))
 
@@ -497,6 +505,8 @@
   (make-parameter (lambda ignore
                     (error "No loader defined."))))
 
+(define .gosh-executer #f)
+
 (define .gosh-compiler
   (make-parameter (lambda ignore
                     (error "No compiler defined."))))
@@ -517,9 +527,15 @@
 
 (define *path* '("/bin" "/usr/bin"))
 
+(define (set-gosh-executer! val) (set! .gosh-executer val))
+
 (define (.load cont file [display #t])
   ((.gosh-loader) file (current-namespace) display)
   (cont (if display file (void))))
+
+(define (.exec cont)
+  (.gosh-executer)
+  (cont (void)))
 
 (define (.in)
   (let ([chan (thread-cell-ref .stdin)])
@@ -545,7 +561,7 @@
              (boolean? x)
              (pregexp? x)
              (set? x)
-             (empty? x))
+             (null? x))
          (equal? x y)]
         [(association? x) (and (association? y)
                                (.gosh-equal? (association-key x)
@@ -580,7 +596,7 @@
   (cont (.rev-append (.ghead x) '())))
 
 (define (.rev-append x acc)
-  (if (empty? x)
+  (if (null? x)
       acc
       (.rev-append (.gtail x) (mcons (.ghead x) acc))))
 
@@ -597,10 +613,13 @@
          [(? path?) (path->string x)]
          [_ x]))
 
-(define (ppwrap . things-to-pprint)
-  (for ([item (in-list things-to-pprint)])
-       (pretty-print item (current-error-port)))
-  (last things-to-pprint))
+;; (define (ppwrap . things-to-pprint)
+;;   (for ([item (in-list things-to-pprint)])
+;;        (pretty-print item (current-error-port)))
+;;   (let loop ([l things-to-pprint])
+;;     (if (null? (cdr l))
+;;         (car l)
+;;         (loop (cdr l)))))
 
 (define (.head cont args)
   (protected-cell-access cont (lambda () (.ghead (.ghead args)))))
@@ -620,7 +639,7 @@
 
 (define (.list-length l)
   (define (gl-aux l res)
-    (if (empty? l)
+    (if (null? l)
         res
         (gl-aux (.gtail l) (add1 res))))
   (gl-aux l 0))
@@ -628,7 +647,7 @@
 (define (.length cont args)
   (define (process l)
     (match l
-           [(? empty?) (cont 0)]
+           [(? null?) (cont 0)]
            [(or (? mpair?) (? pair?)) (cont (.list-length l))]
            [(? string?) (cont (string-length l))]
            [_ (gosh-arg-error "'length' not defined for value" l)]))
@@ -647,7 +666,7 @@
 (define (.ghead glist)
   (cond [(mpair? glist) (.car glist)]
         [(pair? glist) (car glist)]
-        [(empty? glist) (error "Empty list (head)")]
+        [(null? glist) (error "Empty list (head)")]
         [else (error "Not a list (head)")]))
 
 (define (.gtail glist)
@@ -662,7 +681,7 @@
                       the-tail)])
              result))]
         [(pair? glist) (cdr glist)]
-        [(empty? glist) (error "Empty list (tail)")]
+        [(null? glist) (error "Empty list (tail)")]
         [else (error "Not a list (tail)")]))
 
 (define (.nth-cdr glist n)
@@ -719,7 +738,7 @@
 
 (define (.dot cont container)
   (define (.dotlist cont lyst)
-    (if (empty? lyst)
+    (if (null? lyst)
         #f
         (begin
           (cont (.ghead lyst))
@@ -744,7 +763,7 @@
                [(mpair? item)
                 (cont
                  (let loop ([current item] [result container])
-                   (if (empty? current)
+                   (if (null? current)
                        result
                        (loop (.gtail current)
                              (let ([current-val (.car current)])
@@ -763,10 +782,10 @@
                        container
                        (hash-keys item)))]
                [#t (cont (set-remove container item))])]
-        [(or (mpair? container) (pair? container) (empty? container))
+        [(or (mpair? container) (pair? container) (null? container))
          (let ([reslist (mlist #f)])
            (let loop ([current container] [res-tail reslist])
-             (if (empty? current)
+             (if (null? current)
                  (cont (mcdr reslist))
                  (let ([h (.ghead current)])
                    (if (.gosh-equal? h item)
@@ -817,7 +836,7 @@
                  (hash-keys item))]
                [(mpair? item)
                 (let loop ([current item] [result container])
-                  (if (empty? current)
+                  (if (null? current)
                       result
                       (loop (.gtail current)
                             (let ([current-assoc (.car current)])
@@ -849,7 +868,7 @@
                [(set? item) (set-union container item)]
                [(mpair? item)
                 (let loop ([current item] [result container])
-                  (if (empty? current)
+                  (if (null? current)
                       result
                       (loop (.gtail current)
                             (let ([current-val (.car current)])
@@ -871,7 +890,7 @@
          (cond [(set? item) (.addcontainer container (set->list item))]
                [(mpair? item)
                 (let loop ([current item] [result '()])
-                  (if (empty? current)
+                  (if (null? current)
                       (string-append container (reverse result))
                       (loop (.gtail current)
                             (let ([current-val (.car current)])
@@ -887,10 +906,10 @@
                 (string-append container (list->string item))]
                [(string? item) (string-append container item)]
                [#t (gosh-arg-error "Not a container of characters" item)])]
-        [(empty? container)
+        [(null? container)
          (cond [(mlist? item) item]
                [(list? item) (list->mlist item)]
-               [(empty? item) '()]
+               [(null? item) '()]
                [(set? item) (list->mlist (set->list item))]
                [(hash? item) (list->mlist
                               (for/list ([(k v) (in-hash item)])
@@ -901,7 +920,7 @@
         [(or (mpair? container) (pair? container))
          (let ([mlist (cond [(mlist? item) item]
                             [(list? item) (list->mlist item)]
-                            [(empty? item) '()]
+                            [(null? item) '()]
                             [(set? item) (list->mlist (set->list item))]
                             [(hash? item) (list->mlist
                                            (for/list ([(k v) (in-hash item)])
@@ -927,7 +946,7 @@
         [(string? container)
          (cond [(char? item) (string-append container (string item))]
                [#t (gosh-arg-error "Not a character" item)])]
-        [(empty? container) (mlist item)]
+        [(null? container) (mlist item)]
         [(or (pair? container) (mpair? container))
          (let-values ([(cfirst clast) (.copy container)])
            (set-mcdr! clast (mlist item))
@@ -986,13 +1005,13 @@
           [(set? container)
            (and (set-member? container index) container)]
           [(association? container) ; assoc
-           (let ([idx (adjust-index index container (thunk* 2))])
+           (let ([idx (adjust-index index container (lambda _ 2))])
              (and idx (if (= idx 0)
                           (association-key container)
                           (association-val container))))]
           [(mpair? container)
            (let ([idx (adjust-index index container mlength)])
-             (and idx (.list-ref identity container idx)))]
+             (and idx (.list-ref (lambda (x) x) container idx)))]
           [(list? container)
            (let ([idx (adjust-index index container length)])
              (and idx (list-ref container idx)))]
@@ -1027,7 +1046,7 @@
 
 (define (.assign cont container indices val)
   (define (hash-assign h idx idxs item)
-    (if (empty? idxs)
+    (if (null? idxs)
         (hash-set h idx item)
         (hash-set h idx (assign-aux (hash-ref h idx) idxs item))))
   (define (vector-assign vec idx idxs item)
@@ -1041,9 +1060,19 @@
              (match
               vec
               ['#() #f]
-              [_ (let ([new-vec (vector-copy vec)])
+              [_ (let ([new-vec
+                        (let* ([vlen (vector-length vec)]
+                               [out-vec (make-vector vlen)])
+                          (let loop ([idx 0])
+                            (if (>= idx vlen)
+                                out-vec
+                                (begin
+                                  (vector-set! out-vec
+                                               idx
+                                               (vector-ref vec idx))
+                                  (loop (add1 idx))))))])
                    (vector-set! new-vec adjusted-idx
-                                (if (empty? idxs)
+                                (if (null? idxs)
                                     item
                                     (assign-aux (vector-ref vec adjusted-idx)
                                                 idxs
@@ -1054,10 +1083,10 @@
     (match
      idx
      [(struct association (key val))
-      (and (empty? idxs)
+      (and (null? idxs)
            (integer? key)
            (integer? val)
-           (or (and (empty? lyst)
+           (or (and (null? lyst)
                     (and (or (= key 0) (= key -1))
                          (or (= val 0) (= val -1)))
                     (.addcontainer '() item))
@@ -1073,7 +1102,7 @@
                             (cons kar kdr))
                         (cond
                          [(eq? key 0)
-                          (let ([to-add (if (empty? idxs)
+                          (let ([to-add (if (null? idxs)
                                             item
                                             (assign-aux kar idxs item))])
                             (when (or (string? to-add)
@@ -1102,7 +1131,7 @@
                     (cons kar kdr))
                 (if (eq? adjusted-idx 0)
                     (mcons
-                     (if (empty? idxs)
+                     (if (null? idxs)
                          item
                          (assign-aux kar idxs item))
                      kdr)
@@ -1119,7 +1148,7 @@
                 (hash? item)
                 (vector? item))
             (set! item (.addcontainer "" item)))
-      (and (empty? idxs)
+      (and (null? idxs)
            (integer? key)
            (integer? val)
            (or (and (equal? str "")
@@ -1148,7 +1177,7 @@
   (define (assign-aux container indices val)
     (unless (or (mpair? indices) (pair? indices))
             (gosh-arg-error "Invalid indices" indices))
-    (cond [(or (mpair? container) (pair? container) (empty? container))
+    (cond [(or (mpair? container) (pair? container) (null? container))
            (list-assign container
                         (.ghead indices)
                         (.gtail indices)
@@ -1221,14 +1250,14 @@
     success?))
 
 (define (zip f l1 l2)
-  (cond [(and (empty? l1) (empty? l2)) '()]
-        [(or (empty? l1) (empty? l2)) #f]
+  (cond [(and (null? l1) (null? l2)) '()]
+        [(or (null? l1) (null? l2)) #f]
         [else (let ([tail (zip f (cdr l1) (cdr l2))])
                 (and tail
                      (cons (cons (car l1) (car l2)) tail)))]))
 
 (define (.list-ref cont container index)
-  (cond [(or (empty? container) (not (integer? index))) #f]
+  (cond [(or (null? container) (not (integer? index))) #f]
         [(eqv? index 0) (cont (.car container))]
         [#t (.list-ref cont (.gtail container) (sub1 index))]))
 
@@ -1236,7 +1265,7 @@
   (.gosh-fprint (current-output-port) val))
 
 (define (.gosh-sprint val)
-  (with-output-to-string (thunk (.gosh-print val))))
+  (with-output-to-string (lambda () (.gosh-print val))))
 
 (define (.gosh-fprint out val)
   (.gosh-fprint-aux out val 0 0))
@@ -1362,6 +1391,12 @@
 
 (define-logger wmatch)
 
+(define (splitf-at lyst pred)
+  (let loop ([in-list lyst] [out-prefix '()])
+    (cond [(null? in-list) (values (reverse out-prefix) '())]
+          [(not (pred (car in-list))) (values (reverse out-prefix) in-list)]
+          [else (loop (cdr in-list) (cons (car in-list) out-prefix))])))
+
 (define (.wild-match path-item current-dir cont)
   (if (or (symbol? path-item) (string? path-item))
         (call/ec
@@ -1386,11 +1421,11 @@
            (define (base-path-segments str)
              (map pathify-seg (explode-path str)))
            (define (path-string segs)
-             (if (empty? segs) "" (path->string (apply build-path segs))))
+             (if (null? segs) "" (path->string (apply build-path segs))))
            (define (path-segments str)
              (let* ([base-segments (base-path-segments str)]
                     [segments
-                     (if (equal? (first base-segments) "/")
+                     (if (equal? (car base-segments) "/")
                          base-segments
                          (append (base-path-segments current-dir)
                                  base-segments))])
@@ -1475,19 +1510,19 @@
            (define (wild-impl header segs)
              (log-wmatch-debug "wild-impl -- Header: ~s, Segs: ~s"
                                header segs)
-             (if (empty? segs)
+             (if (null? segs)
                  (when (exists? header) (cont (strip-result header)))
                  (let-values ([(translated nowild)
-                               (translate-seg (first segs))])
+                               (translate-seg (car segs))])
                    (log-wmatch-debug "wild-impl -- Translated: ~s, Nowild: ~s"
                                      translated nowild)
-                   (let* ([last-seg (empty? (rest segs))]
+                   (let* ([last-seg (null? (cdr segs))]
                           [is-magic? (eq? translated magic-dot-star)]
                           [pattern (pregexp
                                     (string-append "^" translated "$"))])
                      (log-wmatch-debug "wild-impl -- IsMagic: ~s, Pattern: ~s"
                                        is-magic? pattern)
-                     (when is-magic? (wild-impl header (rest segs)))
+                     (when is-magic? (wild-impl header (cdr segs)))
                      (for ([f (in-list (with-handlers*
                                         ([exn:fail? (lambda (_) '())])
                                         (directory-list header)))])
@@ -1508,7 +1543,7 @@
                                           (wild-impl new-header
                                                      (if is-magic?
                                                          segs
-                                                         (rest segs))))))))))))
+                                                         (cdr segs))))))))))))
            (let ([path-str (~a path-item)])
              (unless (> (string-length path-str) 0) (fail))
              (call-with-values (lambda () (header-and-wild path-str))
@@ -1533,8 +1568,8 @@
   (let ([gosh-name (string->symbol (string-append ".." fun))])
     gosh-name))
 
-(define-for-syntax (translate-fun fun)
-  (string->symbol (string-append "." fun)))
+;; (define-for-syntax (translate-fun fun)
+;;   (string->symbol (string-append "." fun)))
 
 (define (ensure-mlist l)
   (if (mpair? l) l (list->mlist l)))
@@ -1547,21 +1582,21 @@
    [(null? (mcdr (mcdr ml))) (f (mcar ml) (mcar (mcdr ml)))]
    [else (apply f (mlist->list ml))]))
 
-(define-syntax (pass-through exp)
-  (syntax-case exp ()
-    [(pass-through fun)
-     (let ([fun-name (syntax-e #'fun)])
-       (with-syntax ([translated-fun-name
-                      (datum->syntax #'fun (translate-fun fun-name))])
-                    #'(begin (set-add! racket-funs 'fun)
-                             (define (translated-fun-name cont args)
-                               (cont (mapply fun args))))))]))
+;; (define-syntax (pass-through exp)
+;;   (syntax-case exp ()
+;;     [(pass-through fun)
+;;      (let ([fun-name (syntax-e #'fun)])
+;;        (with-syntax ([translated-fun-name
+;;                       (datum->syntax #'fun (translate-fun fun-name))])
+;;                     #'(begin (set-add! racket-funs 'fun)
+;;                              (define (translated-fun-name cont args)
+;;                                (cont (mapply fun args))))))]))
 
 (define (.pop-clause name)
   (let ([clause-list (hash-ref function-clauses name #f)])
     (when clause-list
           (let ([new-clause-list (cdr clause-list)])
-            (if (empty? new-clause-list)
+            (if (null? new-clause-list)
                 (error "Attempt to pop last function clause.")
                 (begin (hash-set! function-clauses name new-clause-list)
                        (hash-set!
@@ -1637,17 +1672,17 @@
   (define base-string "---------------")
   (define base-length (string-length base-string))
   (define (print-defs-aux lyst mod)
-    (unless (empty? lyst)
+    (unless (null? lyst)
             (if (or (null? (caar lyst)) (equal? (caar lyst) mod))
                 (printf "~%~a~%" (cadar lyst))
                 (printf "~%~a:~%~%~a~%" (caar lyst) (cadar lyst)))
-            (print-defs-aux (rest lyst) (caar lyst))))
+            (print-defs-aux (cdr lyst) (caar lyst))))
   (printf "~a ~a ~a" base-string fname base-string)
   (let* ([fun (on-error (lambda ()
                           (namespace-variable-value (fun->gosh-fun fname)))
                         #f)]
          [defs (if (goshfun? fun) (goshfun-defs fun) '())])
-    (if (empty? defs)
+    (if (null? defs)
         (printf "~%")
         (print-defs-aux (reverse defs) #f)))
   (printf "~a~%~%" (string-append
@@ -1663,7 +1698,7 @@
 
 (define (.mmap fun arg-list)
   (define (aux args)
-    (if (empty? args)
+    (if (null? args)
         '()
 ;;        (cons (fun (mcar args)) (.mmap fun (mcdr args)))))
         (cons (fun (mcar args)) (.mmap fun (.gtail args)))))
@@ -1672,10 +1707,10 @@
       (map fun arg-list)))
 
 (define (.tolist listish)
-  (.mmap identity listish))
+  (.mmap (lambda (x) x) listish))
 
 (define (.mlist->list mlist)
-  (if (empty? mlist)
+  (if (null? mlist)
       '()
       (cons (mcar mlist) (.mlist->list (mcdr mlist)))))
 
@@ -1839,14 +1874,14 @@
 (define (init-script-variables path args)
   (namespace-set-variable-value! '$0 (path->string path))
   (namespace-set-variable-value! '$* args)
-  (let ([num-args (mlength args)])
+  (let ([num-args (.list-length args)])
     (let loop ([index 1] [lyst args])
       (if (> index num-args)
           'ok
           (begin
-            (namespace-set-variable-value!
-             (string->symbol (format "$~a" index))
-             (.car lyst))
+            (hash-set (.free-vars)
+                      (string->symbol (format "<toplevel>..~a" index))
+                      (.car lyst))
             (loop (add1 index) (.cdr lyst)))))))
 
 (define (invoke-executable path args cont)

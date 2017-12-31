@@ -1,8 +1,15 @@
 
-#lang racket
+#lang racket/base
 
-(require "parse.rkt" "runtime.rkt" (except-in racket/control set) racket/stream
-         racket/mpair racket/trace racket/rerequire parser-tools/lex)
+(require "parse.rkt" "runtime.rkt" (except-in racket/control set)
+;        (only-in racket/stream)
+         (only-in racket/set seteq set-member? set-add mutable-set set->list)
+         racket/mpair
+                                        ;racket/trace
+         racket/rerequire racket/match
+         (only-in racket/string string-replace)
+                                        ;racket/pretty
+         parser-tools/lex)
 
 (provide (all-defined-out))
 ;; (provide gosh-compile simple-binop? semidet-binop? compile-binop new-arg
@@ -35,7 +42,7 @@
 (define (modsyms mod)
   (dynamic-rerequire mod)
   (let-values ([(e ignore) (module->exports mod)])
-    (map (lambda (s) (symbol->string (first s))) (rest (first e)))))
+    (map (lambda (s) (symbol->string (car s))) (cdr (car e)))))
 
 (define (imported? name)
   (and (imports) (hash-ref (imports) name #f)))
@@ -72,6 +79,12 @@
 (define (new-arg) (gensym "arg-"))
 
 (define (new-file) (gensym "file-"))
+
+(define (last x)
+  (let loop ([l x])
+    (if (null? (cdr l))
+        (car l)
+        (loop (cdr l)))))
 
 (define (compile-binop op arg1 arg2 cont)
   (let ([a1 (new-arg)]
@@ -158,10 +171,16 @@
   (let ([c (gensym "cont-")])
     `(.strict-list (lambda (,c) ,(gcomp arg c)) ,cont)))
 
+(define (range start end)
+  (let loop ([idx start] [result '()])
+    (if (>= idx end)
+        (reverse result)
+        (loop (add1 idx) (cons idx result)))))
+
 (define (compile-&+ args cont)
-  (let ([arg-vals (map (thunk* (new-arg)) args)]
-        [gens (map (thunk* (gensym "gen-")) args)]
-        [vals (map (thunk* (gensym "val-")) args)]
+  (let ([arg-vals (map (lambda _ (new-arg)) args)]
+        [gens (map (lambda _ (gensym "gen-")) args)]
+        [vals (map (lambda _ (gensym "val-")) args)]
         [loop (gensym "loop-")])
     `(let (,@(for/list
                [(i (range 0 (length args)))]
@@ -201,7 +220,7 @@
       (and (or (pair? ,arg-list)
                (mpair? ,arg-list))
            (andmap procedure? ,arg-list)
-           (let ([,gen-count (.length identity ,arg-list)]
+           (let ([,gen-count (.length (lambda (x) x) ,arg-list)]
                  [,generators
                   (map (lambda (,gen)
                          (generator ()
@@ -274,7 +293,7 @@
                        (cons car-val cdr-val)))]))
 
 (define (list-literal-value x)
-  (cond [(empty? x) '()]
+  (cond [(null? x) '()]
         [(or (var? x) (box? x) (symbol? x)) #f]
         [(not (pair? x)) x]
         [else (match x
@@ -290,10 +309,10 @@
     ['() '#()]
     [(? (lambda (x) (not (pair? x)))) #f]
     [x (let ([vals (map list-literal-value x)])
-         (and (andmap identity vals) (apply vector vals)))]))
+         (and (andmap (lambda (x) x) vals) (apply vector vals)))]))
 
 (define (compile-tuple args cont)
-  (if (empty? args)
+  (if (null? args)
       `(,cont '#())
       (let ([lval (tuple-literal args)])
         (if lval
@@ -303,8 +322,8 @@
 (define (compile-tuple-tail args so-far cont)
   (let ([arg-val (new-arg)]
         [arg-val2 (new-arg)])
-    (cond [(empty? args) `(,cont (vector ,@(reverse so-far)))]
-          [(or (empty? (cdr args)) (pair? (cdr args)))
+    (cond [(null? args) `(,cont (vector ,@(reverse so-far)))]
+          [(or (null? (cdr args)) (pair? (cdr args)))
            (gcomp
             (car args)
             `(lambda (,arg-val)
@@ -315,7 +334,7 @@
           [else (error (format "Invalid tuple tail -- ~s" args))])))
 
 (define (compile-list args cont)
-  (if (empty? args)
+  (if (null? args)
       `(,cont '())
       (let ([lval (list-literal args)])
         (if lval
@@ -325,8 +344,8 @@
 (define (compile-list-tail args so-far cont)
   (let ([arg-val (new-arg)]
         [arg-val2 (new-arg)])
-    (cond [(empty? args) `(,cont ,(make-mcons-chain so-far))]
-          [(or (empty? (cdr args)) (pair? (cdr args)))
+    (cond [(null? args) `(,cont ,(make-mcons-chain so-far))]
+          [(or (null? (cdr args)) (pair? (cdr args)))
            (gcomp
             (maybe-translate-parencmd (car args))
             `(lambda (,arg-val)
@@ -341,7 +360,7 @@
                  `(lambda (,arg-val2)
                     (unless (or (pair? ,arg-val2)
                                 (mpair? ,arg-val2)
-                                (empty? ,arg-val2))
+                                (null? ,arg-val2))
                       (error (format "Invalid list tail -- ~s"
                                      ,arg-val2)))
                     (,cont ,(make-mcons-chain
@@ -361,24 +380,24 @@
 
 (define (make-mcons-chain lyst . tail)
   (define (mmc-aux l so-far)
-    (cond [(empty? l) so-far]
-          [(vector? (first l))
-           (mmc-aux (rest l) `(mappend ,(vector-ref (first l) 0) ,so-far))]
-          [else (mmc-aux (rest l) `(.cons ,(first l) ,so-far))]))
-  (if (empty? tail)
+    (cond [(null? l) so-far]
+          [(vector? (car l))
+           (mmc-aux (cdr l) `(mappend ,(vector-ref (car l) 0) ,so-far))]
+          [else (mmc-aux (cdr l) `(.cons ,(car l) ,so-far))]))
+  (if (null? tail)
       (mmc-aux lyst ''())
-      (mmc-aux lyst (first tail))))
+      (mmc-aux lyst (car tail))))
 
 (define (compile-set elements cont)
   (let ([so-far (gensym "so-far-")])
-    (if (empty? elements)
+    (if (null? elements)
         `(,cont (set))
         (compile-set-tail elements '(set) cont))))
 
 (define (compile-set-tail elements so-far cont)
   (let ([arg-val (new-arg)]
         [so-far2 (gensym "so-far-")])
-    (if (empty? elements)
+    (if (null? elements)
         `(,cont ,so-far)
         (gcomp
          (car elements)
@@ -388,7 +407,7 @@
 
 (define (compile-hash pairs cont)
   (let ([so-far (gensym "so-far-")])
-    (if (empty? pairs)
+    (if (null? pairs)
         `(,cont (hash))
         (compile-hash-tail pairs '(hash) cont))))
 
@@ -396,7 +415,7 @@
   (let ([arg-val (new-arg)]
         [arg-val2 (new-arg)]
         [so-far2 (gensym "so-far-")])
-    (if (empty? pairs)
+    (if (null? pairs)
         `(,cont ,so-far)
         (gcomp
          (cadar pairs)
@@ -473,7 +492,7 @@
 
 (define (hash-exp pat)
   (let ([vars (pat-vars pat)])
-    (cons 'hash (append-map (lambda (v) `(,(strip-$ v) ,v)) vars))))
+    (cons 'hash (apply append (map (lambda (v) `(,(strip-$ v) ,v)) vars)))))
 
 (define (compile-simple-match arg pat cont)
   (let* ([arg-val (new-arg)]
@@ -504,6 +523,18 @@
                     [(defined-vars (append (pat-vars pat) (defined-vars)))]
                     (gcomp arg2 cont))]
             [_ #f]))))))
+
+(define (split-at-right lyst count)
+  (let loop ([in-list (reverse lyst)] [idx 0] [so-far '()])
+    (if (>= idx count)
+        (values (reverse in-list) so-far)
+        (loop (cdr in-list) (add1 idx) (cons (car in-list) so-far)))))
+
+(define (drop-right lyst count)
+  (let loop ([in-list (reverse lyst)] [idx 0])
+    (if (>= idx count)
+        (reverse in-list)
+        (loop (cdr in-list) (add1 idx)))))
 
 (define (translate-pattern pat)
   (match pat
@@ -586,7 +617,7 @@
               (list old-a new-a))))
 
 (define (compile-seq arg1 arg2 cont)
-  `(begin ,(gcomp arg1 'identity)
+  `(begin ,(gcomp arg1 '(lambda (x) x))
           ,(gcomp arg2 cont)))
 
 (define (compile-simple-filter exp filt filtexp cont)
@@ -744,22 +775,22 @@
                    `(lambda (,arg-val)
                       (,cont ,arg-val)
                       (,loop (add1 %?)
-                             ,@(rest seqvars) ,arg-val)))])
+                             ,@(cdr seqvars) ,arg-val)))])
     (letrec ([run-up
               (lambda (exps vars)
-                (if (empty? exps)
+                (if (null? exps)
                     `(let ,loop
                        ([%? ,(length backexps)]
                         ,@(for/list ([var seqvars]
                                      [arg bindvars])
                                     (list var arg)))
                        ,mainexp)
-                    (let ([exp (first exps)] [var (first vars)])
+                    (let ([exp (car exps)] [var (car vars)])
                       (gcomp exp
                              `(lambda (,var)
                                 (,cont ,var)
-                                ,(run-up (rest exps)
-                                         (rest vars)))))))])
+                                ,(run-up (cdr exps)
+                                         (cdr vars)))))))])
       (run-up backexps bindvars))))
 
 (define (compile-! arg cont)
@@ -812,10 +843,10 @@
   (define args
     (if expand-strs
         `(list ,@(map (lambda (arg)
-                        (if (or (string? arg) (eq? (first arg) 'word-split))
+                        (if (or (string? arg) (eq? (car arg) 'word-split))
                             `(parencmd (~~ ,arg))
                             arg))
-                      (rest in-args)))
+                      (cdr in-args)))
         in-args))
   (match fun-ref
     ;; [(struct var (var-name _))
@@ -832,8 +863,8 @@
                    args cont))))]
     [(list 'atom name)
      (app-refs (cons name (app-refs)))
-                                        ;     (.set-up-external-prog-lookup! name)
-     (compile-app-aux (fun-name name) args cont)]
+;     (.set-up-external-prog-lookup! name)
+     (compile-app-aux (.fun-name name) args cont)]
     [(? string?) #:when expand-strs
      (let ([initial-args (new-arg)]
            [expanded-args (new-arg)]
@@ -848,7 +879,7 @@
                                 (let* ([,fnamestr (mcar ,expanded-args)]
                                        [,fname (.fun-name ,fnamestr)])
                                   (.set-up-external-prog-lookup! ,fnamestr)
-                                  (if (empty? (mcdr ,expanded-args))
+                                  (if (null? (mcdr ,expanded-args))
                                       ((namespace-variable-value ,fname)
                                        ,cont-val ,initial-args)
                                       ((namespace-variable-value ,fname)
@@ -868,11 +899,6 @@
                         (cond [(procedure? ,arg-val)
                                (,arg-val ,lcont ,arg)]
                               [else (.fetch ,lcont ,arg-val ,arg)])))))))]))
-
-(define (fun-name name)
-  (if (set-member? racket-funs name)
-      (fun->racket-fun name)
-      (fun->gosh-fun name)))
 
 (define (compile-app-aux name args cont)
   (let ([arg-val (new-arg)])
@@ -895,7 +921,7 @@
   (define name (string->symbol namestr))
   (let ([gosh-name (string->symbol (string-append ".." namestr))]
         [clause-name-list (hash-ref function-clause-names name)])
-    (if (empty? (cdr clause-name-list))
+    (if (null? (cdr clause-name-list))
         (error "Attempt to pop last function clause.")
         `(begin
            (.pop-clause ',name)
@@ -1061,7 +1087,7 @@
    [(cons (list _ pat guard-wrapper exp) tail)
     (parameterize
      [(defined-vars (append (pat-vars pat) (defined-vars)))]
-     (let ([guard (and guard-wrapper (second guard-wrapper))])
+     (let ([guard (and guard-wrapper (cadr guard-wrapper))])
        (cons `[,pat
                ,@(compile-func-guard guard)
                ,(gcomp exp cont)]
@@ -1069,14 +1095,14 @@
     [x '()]))
 
 (define (all-post-match? clauses)
-  (andmap (lambda (c) (eq? (first c) '>~)) clauses))
+  (andmap (lambda (c) (eq? (car c) '>~)) clauses))
 
 (define (compile-case-clauses arg clauses cont)
   (match clauses
     [(cons (list discriminator pat guard-wrapper exp) tail)
     (parameterize
      [(defined-vars (append (pat-vars pat) (defined-vars)))]
-     (let ([guard (and guard-wrapper (second guard-wrapper))])
+     (let ([guard (and guard-wrapper (cadr guard-wrapper))])
        (case discriminator
          [(<!)
           `((match ,arg
@@ -1092,7 +1118,7 @@
                  [clauses (compile-case-clauses next-arg tail cont)])
             `((let ([,fname
                      (lambda (,next-arg)
-                       ,@(if (empty? clauses)
+                       ,@(if (null? clauses)
                              '(#f)
                              clauses))])
                 (match ,arg
@@ -1227,8 +1253,8 @@
 ;;  spans)
   (map (lambda (x)
          (substring (current-exp-string)
-                    (sub1 (position-offset (first x)))
-                    (sub1 (position-offset (second x)))))
+                    (sub1 (position-offset (car x)))
+                    (sub1 (position-offset (cadr x)))))
        spans))
 
 (define (source-module)
@@ -1439,7 +1465,7 @@
          [bindings (match-up-anon pipelist)])
     (match pat
            [(list 'up val)
-            (set! pat (second pat))
+            (set! pat (cadr pat))
             (set! is-up #t)]
            [_ 'ok])
     (if is-bottom
@@ -1732,13 +1758,13 @@
               ,(case desc
                 [(both)
                  `(with-output-to-file ,file-arg-val
-                    (thunk
+                    (lambda ()
                      (parameterize
                       [(current-error-port (current-output-port))]
                       ,body))
                     #:exists ',mode)]
                 [(1) `(with-output-to-file ,file-arg-val
-                        (thunk ,body) #:exists ',mode)])))))
+                        (lambda () ,body) #:exists ',mode)])))))
 
               ;; (call-with-output-file ,file-arg-val
               ;;   (lambda (,outport)
@@ -1754,7 +1780,7 @@
   (compile-str-aux exps cont '()))
 
 (define (compile-str-aux exps cont sofar)
-  (if (empty? exps)
+  (if (null? exps)
       (if (= (length sofar) 1)
           `(,cont ,@sofar)
           `(,cont (string-append ,@(reverse sofar))))
@@ -1780,7 +1806,7 @@
   (compile-atom-aux exps cont '()))
 
 (define (compile-atom-aux exps cont sofar)
-  (if (empty? exps)
+  (if (null? exps)
       (if (= (length sofar) 1)
           `(,cont ,@sofar)
           `(,cont (string-append ,@(reverse sofar))))
@@ -1900,9 +1926,9 @@
     [(list '- arg) (det? arg)]
     [(list 'elements-of arg) #f]
     [(list-rest 'list args ... pat)
-     (andmap det? (if (empty? pat) args (cons pat args)))]
+     (andmap det? (if (null? pat) args (cons pat args)))]
     [(list-rest 'tuple args ... pat)
-     (andmap det? (if (empty? pat) args (cons pat args)))]
+     (andmap det? (if (null? pat) args (cons pat args)))]
     [(list 'hash pairs ...) (andmap (lambda (pair) (andmap det? pair))
                                     pairs)]
     [(list 'set elements ...) (andmap det? elements)]
@@ -1996,9 +2022,9 @@
     [(list '- arg) (semidet? arg)]
     [(list 'elements-of arg) #f]
     [(list-rest 'list args ... pat)
-     (andmap semidet? (if (empty? pat) args (cons pat args)))]
+     (andmap semidet? (if (null? pat) args (cons pat args)))]
     [(list-rest 'tuple args ... pat)
-     (andmap semidet? (if (empty? pat) args (cons pat args)))]
+     (andmap semidet? (if (null? pat) args (cons pat args)))]
     [(list 'hash pairs ...) (andmap (lambda (pair) (andmap semidet? pair))
                                     pairs)]
     [(list 'set elements ...) (andmap semidet? elements)]
@@ -2151,10 +2177,10 @@
            (list (and discriminator (or '=! '<! '>! '<? '>? '>~))
                  name pat guard pipe exp)
            start end)
-     (compile-func-clause discriminator name pat (and guard (second guard))
+     (compile-func-clause discriminator name pat (and guard (cadr guard))
                           pipe exp start end cont)]
     [(list 'fun name pat guard pipe exp)
-     (compile-anon-func name pat (and guard (second guard)) pipe exp cont)]
+     (compile-anon-func name pat (and guard (cadr guard)) pipe exp cont)]
     [(list 'bracefun exp start end) (compile-bracefun exp start end cont)]
     [(list 'case exp clauses) (compile-case exp clauses cont)]
     [(list 'set-at exp) (compile-set-at exp cont)]
@@ -2229,23 +2255,23 @@
         [_ tree]))) ; ignoring vectors for right now???
 
 (define (trans expstr)
-  (simplify (gosh-compile (gosh expstr 'colon) 'identity)))
+  (simplify (gosh-compile (gosh expstr 'colon) '(lambda (x) x))))
 
 (define (strans expstr)
-  (simplify (gosh-compile (gosh expstr 'default) 'identity)))
+  (simplify (gosh-compile (gosh expstr 'default) '(lambda (x) x))))
 
 (define (gosh-compile exp cont)
   (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
-  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+;  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))
                  (app-refs '())
                  (clause-names '())
                  (top-level-vars (mutable-set))]
     (let ([compiled (gcomp exp cont)])
-      (when (pprint)
-        (pretty-print (simplify compiled)))
+      ;; (when (pprint)
+      ;;   (pretty-print (simplify compiled)))
       `(begin
          ,@(map (lambda (v) `(define ,v #f)) (set->list (top-level-vars)))
          (for-each .set-up-external-prog-lookup! ',(app-refs))
@@ -2256,13 +2282,12 @@
 
 (define (gosh-file-compile exp cont)
   (set! exp (depos exp))
-  (when (getenv "GOSH_PPRINT") (pprint #t))
-  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  ;; (when (getenv "GOSH_PPRINT") (pprint #t))
+  ;; (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))]
     (let ([compiled (gcomp exp cont)])
-      (when (pprint)
-        (pretty-print (simplify compiled)))
+      ;; (when (pprint)
+      ;;   (pretty-print (simplify compiled)))
       compiled)))
-
 
