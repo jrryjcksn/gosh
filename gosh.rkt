@@ -1,5 +1,6 @@
 #lang racket/base
 (require (except-in racket/control set)
+         racket/set
          "parse.rkt" "compile.rkt" "runtime.rkt"
          "bi.rkt"
          "toplevel.rkt"

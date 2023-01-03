@@ -46,21 +46,27 @@
 (define (do-repl)
   (let ([in (current-input-port)]
         [out (current-output-port)])
-    (repl-aux 'default in out)))
+	(parameterize [(trailset (mutable-set))]
+      (repl-aux 'default in out))))
 
 (define (repl-aux read-state in out)
   (reset-toplevel-channel!)
-  (case read-state
-    [(default)
-     (safe-prompt out #f)
-     (read-and-process read-state in out)]
-    [(colon)
-     (safe-prompt out #t)
-     (read-and-process read-state in out)]))
+  (safe-prompt out read-state)
+  (read-and-process read-state in out))
 
-(define (safe-prompt out with-colon?)
+; (define (repl-aux read-state in out)
+;   (reset-toplevel-channel!)
+;   (case read-state
+;     [(default)
+;      (safe-prompt out #f)
+;      (read-and-process read-state in out)]
+;     [(colon)
+;      (safe-prompt out #t)
+;      (read-and-process read-state in out)]))
+
+(define (safe-prompt out read-state)
   (define (colon-wrap str)
-    (if with-colon? (string-append str ": ") (string-append str ". ")))
+    (string-append str (if (eq? read-state 'colon) ":" ".") " "))
 
   (parameterize [(current-directory .pwd)]
                 (fprintf out
@@ -540,9 +546,9 @@
                         [(list 'import name (list 'except syms))
                          (modsyms-except (gosh-name name) syms)])))))
   (append (if (equal? (path->string (module-being-compiled))
-                      "/home/jerry/gosh/bi.gosh")
+                      "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.gosh")
               '()
-              (all-mod-syms "/home/jerry/gosh/bi.gosh"))
+              (all-mod-syms "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.gosh"))
           (gather imports '())))
 
 (define (translate-imports imports)
@@ -635,9 +641,9 @@
                      syms))])))))
   (set-union (gather imports (set))
              (if (equal? (path->string (module-being-compiled))
-                         "/home/jerry/gosh/bi.gosh")
+                         "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.gosh")
                  (set)
-                 (list->set (modsyms '(file "/home/jerry/gosh/bi.rkt"))))))
+                 (list->set (modsyms '(file "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.rkt"))))))
 
 (define (ppfile filename val)
   (with-output-to-file filename (lambda () (write val) (newline))
@@ -758,16 +764,16 @@
                       (list e)))
                 exported-sym-list))])
       (write `(require racket/match
-                       (only-in racket/set set? set-count)
+                       (only-in racket/set set? set-count set-add)
                        (only-in racket/string string-trim)
                        (only-in racket/port with-output-to-string)
-                       (file "/home/jerry/gosh/runtime.rkt")
-                         (file "/home/jerry/gosh/toplevel.rkt")
-;;                         (file "/home/jerry/gosh/pcomb.rkt")
+                       (file "/Users/jerry/src/github.com/jrryjcksn/gosh/runtime.rkt")
+                         (file "/Users/jerry/src/github.com/jrryjcksn/gosh/toplevel.rkt")
+;;                         (file "/Users/jerry/src/github.com/jrryjcksn/gosh/pcomb.rkt")
                          ,@(if (equal? (path->string (module-being-compiled))
-                                       "/home/jerry/gosh/bi.gosh")
+                                       "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.gosh")
                                '(db)
-                               '((file "/home/jerry/gosh/bi.rkt")))
+                               '((file "/Users/jerry/src/github.com/jrryjcksn/gosh/bi.rkt")))
                          ,@(make-requires (imports))))
 
         (newline)
@@ -1066,7 +1072,11 @@
                               (semaphore-post .toplevel-semaphore)
                               (if (equal? input-val ";")
                                   (loop (async-channel-get .toplevel-chan))
-                                  (reset-toplevel-channel!)))]
+								  (begin
+									(for ([val (in-set (trailset))])
+										 (set-lvar-val! val *empty-lvar*))
+									(set-clear! (trailset))
+									(reset-toplevel-channel!))))]
                            [#t
                             (newline out)
                             (semaphore-post .toplevel-semaphore)

@@ -6,7 +6,7 @@
          racket/generator
          racket/format
          (only-in racket/port with-output-to-string)
-;         racket/pretty
+         racket/pretty
          db
          racket/mpair "parse.rkt" "lex.rkt"
          ;mzlib/os
@@ -24,6 +24,8 @@
 (define-namespace-anchor a)
 (define gosh-ns (namespace-anchor->namespace a))
 (define gosh-namespace (make-parameter gosh-ns))
+
+(define trailset (make-parameter #f))
 
 (define module-name (make-parameter #f))
 (define .cmd-success (make-parameter #t))
@@ -65,9 +67,20 @@
       (set-dollar-q 0))
   (get-dollar-q))
 
-(define (.look-up-free-var name)
-  (or (hash-ref (.env) name #f)
-      (hash-ref (.free-vars) name "")))
+(define *unbound* '#(unbound))
+
+(define (.look-up-free-var name stringify cont)
+  (let [(existing-val
+		 (let [(env-val (hash-ref (.env) name *unbound*))]
+		   (if (not (eq? env-val *unbound*))
+			   env-val
+			   (hash-ref (.free-vars) name *unbound*))))]
+	(if (not (eq? existing-val *unbound*))
+		(cont (deref existing-val))
+		(let [(var (make-lvar))]
+		  (hash-set! (.free-vars) name var)
+		  (cont (if stringify (.stringify var) var))
+		  (hash-remove! (.free-vars) name)))))
 
 (define .gosh-home
   (or (getenv "GOSH_HOME") (string-append (getenv "HOME") "/.gosh")))
@@ -225,7 +238,7 @@
           (parameterize [(current-namespace ns)]
                         (namespace-require 'racket/match)
                         (namespace-require
-                         '(file "/home/jerry/gosh/gosh.rkt"))
+                         '(file "/Users/jerry/src/github.com/jrryjcksn/gosh/gosh.rkt"))
                         (init-script-variables path args)
                       (with-input-from-file
                           (path->string (simplify-path path))
@@ -546,49 +559,104 @@
     (and (not (eq? val .channel-empty))
          (begin (cont val) (.sendin cont)))))
 
+(struct lvar ([val #:mutable]) #:transparent)
+
+(define *empty-lvar* '#(empty))
+
+(define (make-lvar) (lvar *empty-lvar*))
+
+(define (bind! lvar val) (set-lvar-val! lvar val))
+
+(define (unbind! lvar) (set-lvar-val! lvar *empty-lvar*))
+
+(define (unbound? lvar) (eq? (lvar-val lvar) *empty-lvar*))
+
+(define (deref x)
+  (if (lvar? x)
+	  (let ([val (lvar-val x)])
+		(if (eq? val *empty-lvar*)
+			x
+			(deref val)))
+	  x))
+
+(define (src-deref-all x)
+  (match x
+	[(struct lvar (val)) (if (eq? val *empty-lvar*) x (src-deref-all val))]
+	[(or (? mpair?) (? pair?)) (mcons (src-deref-all (.car x)) (src-deref-all (.cdr x)))]
+	[else x]))
+
 (define (.gosh-> x y) (and (> x y) y))
 (define (.gosh->= x y) (and (>= x y) y))
 (define (.gosh-< x y) (and (< x y) y))
 (define (.gosh-<= x y) (and (<= x y) y))
 (define (.gosh-== x y) (and (.gosh-equal? x y) y))
+
 (define (.gosh-!= x y) (and (not (.gosh-equal? x y)) x))
 
-(define (.gosh-equal? x y)
-  (cond [(or (number? x)
-             (string? x)
-             (symbol? x)
-             (char? x)
-             (boolean? x)
-             (pregexp? x)
-             (set? x)
-             (null? x))
-         (equal? x y)]
-        [(association? x) (and (association? y)
-                               (.gosh-equal? (association-key x)
-                                             (association-key y))
-                               (.gosh-equal? (association-val x)
-                                             (association-val y)))]
-        [(hash? x) (and (hash? y)
-                        (= (hash-count x) (hash-count y))
-                        (andmap
-                         (lambda (k)
-                           (and (hash-has-key? y k)
-                                (.gosh-equal? (hash-ref x k) (hash-ref y k))))
-                         (hash-keys x)))]
-        [(vector? x)
-         (and (vector? y)
-              (let ([xlen (vector-length x)])
-                (and (= xlen (vector-length y))
-                     (let loop ([i 0])
-                       (cond [(>= i xlen) #t]
-                             [(.gosh-equal? (vector-ref x i) (vector-ref y i))
-                              (loop (add1 i))]
-                             [else #f])))))]
-        [(or (pair? x) (mpair? x))
-         (and (or (pair? y) (mpair? y))
-              (.gosh-equal? (.ghead x) (.ghead y))
-              (.gosh-equal? (.gtail x) (.gtail y)))]
-        [else #f]))
+(define (.gosh-equal? xin yin)
+  (define success #f)
+  (.gosh-equal-cont xin yin (lambda (ignore) (set! success #t)))
+  success)
+
+(define (.gosh-equal-cont xin yin cont)
+  (define var-trail '())
+  (define (trail var)
+	(set! var-trail (cons var var-trail))
+	(set-add! (trailset) var))
+
+  (define (eq-impl xin yin)
+	(define x (deref xin))
+	(define y (deref yin))
+
+	(cond [(lvar? x)
+		   (bind! x y)
+		   (trail x)]
+		  [(lvar? y)
+		   (bind! y x)
+		   (trail y)]
+		  [(or (number? x)
+               (string? x)
+               (symbol? x)
+               (char? x)
+               (boolean? x)
+               (pregexp? x)
+               (set? x)
+               (null? x))
+           (equal? x y)]
+          [(association? x) (and (association? y)
+								 (eq-impl (association-key x)
+                                               (association-key y))
+								 (eq-impl (association-val x)
+                                               (association-val y)))]
+          [(hash? x) (and (hash? y)
+                          (= (hash-count x) (hash-count y))
+                          (andmap
+                           (lambda (k)
+							 (and (hash-has-key? y k)
+                                  (eq-impl (hash-ref x k) (hash-ref y k))))
+                           (hash-keys x)))]
+          [(vector? x)
+           (and (vector? y)
+				(let ([xlen (vector-length x)])
+                  (and (= xlen (vector-length y))
+                       (let loop ([i 0])
+						 (cond [(>= i xlen) #t]
+                               [(eq-impl (vector-ref x i) (vector-ref y i))
+								(loop (add1 i))]
+                               [else #f])))))]
+          [(or (pair? x) (mpair? x))
+           (and (or (pair? y) (mpair? y))
+				(eq-impl (.ghead x) (.ghead y))
+				(eq-impl (.gtail x) (.gtail y)))]
+          [else #f]))
+
+  (when (eq-impl xin yin)
+	(cont (deref xin)))
+  (for [(v var-trail)]
+	   (unbind! v)
+	   (set-remove! (trailset) v)))
+
+
 
 (define (.gosh-fail . ignore) #f)
 
@@ -612,14 +680,6 @@
          [(? symbol?) (symbol->string x)]
          [(? path?) (path->string x)]
          [_ x]))
-
-;; (define (ppwrap . things-to-pprint)
-;;   (for ([item (in-list things-to-pprint)])
-;;        (pretty-print item (current-error-port)))
-;;   (let loop ([l things-to-pprint])
-;;     (if (null? (cdr l))
-;;         (car l)
-;;         (loop (cdr l)))))
 
 (define (.head cont args)
   (protected-cell-access cont (lambda () (.ghead (.ghead args)))))
@@ -663,26 +723,30 @@
   (when (mapply (eval (string->symbol (.ghead args))) (.gtail args))
         (cont 'ok)))
 
-(define (.ghead glist)
-  (cond [(mpair? glist) (.car glist)]
-        [(pair? glist) (car glist)]
-        [(null? glist) (error "Empty list (head)")]
-        [else (error "Not a list (head)")]))
+(define (.ghead glist-in)
+  (define glist (deref glist-in))
 
-(define (.gtail glist)
-  (cond [(mpair? glist)
-         (let ([the-tail (mcdr glist)])
-           (let ([result
-                  (if (box? the-tail)
-                      (begin
-                        (let ([new-tail (reset ((unbox the-tail) #f))])
-                          (set-mcdr! glist new-tail)
-                          new-tail))
-                      the-tail)])
-             result))]
-        [(pair? glist) (cdr glist)]
-        [(null? glist) (error "Empty list (tail)")]
-        [else (error "Not a list (tail)")]))
+  (deref (cond [(mpair? glist) (.car glist)]
+			   [(pair? glist) (car glist)]
+			   [(null? glist) (error "Empty list (head)")]
+			   [else (error "Not a list (head)")])))
+
+(define (.gtail glist-in)
+  (define glist (deref glist-in))
+
+  (deref (cond [(mpair? glist)
+				(let ([the-tail (mcdr glist)])
+				  (let ([result
+						 (if (box? the-tail)
+							 (begin
+							   (let ([new-tail (reset ((unbox the-tail) #f))])
+								 (set-mcdr! glist new-tail)
+								 new-tail))
+							 the-tail)])
+					result))]
+			   [(pair? glist) (cdr glist)]
+			   [(null? glist) (error "Empty list (tail)")]
+			   [else (error "Not a list (tail)")])))
 
 (define (.nth-cdr glist n)
   (if (<= n 0)
@@ -745,9 +809,9 @@
           (.dot cont (.gtail lyst)))))
   (define (.dothash cont hash)
     (for ([(k v) (in-hash hash)])
-         (cont (association k v))))
+         (cont (association (deref k) (deref v)))))
   (define (.dotset cont set)
-    (for ([val (in-set set)]) (cont val)))
+    (for ([val (in-set set)]) (cont (deref val))))
   (define (.dotstring cont string)
     (for ([ch (in-string string)]) (cont ch)))
   (cond [(or (mpair? container) (pair? container)) (.dotlist cont container)]
@@ -997,28 +1061,28 @@
 
 (define (.fetch cont container indices)
   (define (frame-fetch frame index)
-    (cond [(hash? container)
-           (hash-ref container index #f)]
-          [(vector? container)
-           (let ([idx (adjust-index index container vector-length)])
-             (and idx (vector-ref container idx)))]
-          [(set? container)
-           (and (set-member? container index) container)]
-          [(association? container) ; assoc
-           (let ([idx (adjust-index index container (lambda _ 2))])
-             (and idx (if (= idx 0)
-                          (association-key container)
-                          (association-val container))))]
-          [(mpair? container)
-           (let ([idx (adjust-index index container mlength)])
-             (and idx (.list-ref (lambda (x) x) container idx)))]
-          [(list? container)
-           (let ([idx (adjust-index index container length)])
-             (and idx (list-ref container idx)))]
-          [(string? container)
-           (let ([idx (adjust-index index container string-length)])
-             (and idx (string-ref container idx)))]
-          [#t (gosh-arg-error "Not a container" frame)]))
+	(deref (cond [(hash? container)
+				  (hash-ref container index #f)]
+				 [(vector? container)
+				  (let ([idx (adjust-index index container vector-length)])
+					(and idx (vector-ref container idx)))]
+				 [(set? container)
+				  (and (set-member? container index) container)]
+				 [(association? container) ; assoc
+				  (let ([idx (adjust-index index container (lambda _ 2))])
+					(and idx (if (= idx 0)
+								 (association-key container)
+								 (association-val container))))]
+				 [(mpair? container)
+				  (let ([idx (adjust-index index container mlength)])
+					(and idx (.list-ref (lambda (x) x) container idx)))]
+				 [(list? container)
+				  (let ([idx (adjust-index index container length)])
+					(and idx (list-ref container idx)))]
+				 [(string? container)
+				  (let ([idx (adjust-index index container string-length)])
+					(and idx (string-ref container idx)))]
+				 [#t (gosh-arg-error "Not a container" frame)])))
   (match indices
          ['()
           (cont container)
@@ -1291,6 +1355,10 @@
          (.gosh-fprint-aux out left 0 (add1 depth))
          (fprintf out "=>")
          (.gosh-fprint-aux out right 0 (add1 depth))]
+		[(struct lvar (val))
+		 (if (eq? val *empty-lvar*)
+			   (fprintf out "<any>")
+			   (.gosh-fprint-aux out val 0 depth))]
         [(? hash?)
          (fprintf out "&[")
          (let ([first-time #t])

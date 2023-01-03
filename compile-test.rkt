@@ -209,7 +209,7 @@
 (ensure '((2 3 5 7 11 13 17))
        " :~> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0))[x] while $x < 19))")
 (ensure '((2 3 5 7 11 13 17))
-        " :~> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0)) in %) while % < 19)")
+        " :~> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0)) in %)) while % < 19)")
 (ensure '((2 3 5 7 11 13 17))
         " :~> $p <- @*(2||3::%1+2 when !(% rem (^$p while % * % <= %%) == 0) while % < 19)")
 (ensure '(4) "sqrt[16]")
@@ -325,7 +325,7 @@
 (ensure '(28) '("=! gorp[] -> 6" "<? gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(6) '("=! gorp[] -> 6" ">? gorp[] ^|> $x -> % * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 ;; (ensure-shell '("checkpoint")
-;;               "cat $(ls -df /home/jerry/.hg/hgrc /home/jerry/.hg/last-message.txt) | grep checkpoint")
+;;               "cat $(ls -df /Users/jerry/.hg/hgrc /Users/jerry/.hg/last-message.txt) | grep checkpoint")
 ;;                 ;; "result=$(cat /tmp/echotest)"
 ;;                 ;; "rm /tmp/echotest"
 ;;                 ;; "echo $result"))
@@ -452,7 +452,7 @@
 (ensure '((3)) "{[$1]}[3, 4]")
 (initialize-test-dirs)
 (ensure (list (test-dir "jerry")) (test-dir-match "jerry"))
-(ensure '() "~\"/home/jerryoejfwiejowfieowjfeof\"")
+(ensure '() "~\"/Users/jerryoejfwiejowfieowjfeof\"")
 (ensure (list (test-dir "jerry")) (test-dir-match "jerry*"))
 (ensure (list (test-dir "jerry")) (test-dir-match "jerr*"))
 (ensure (list (test-dir "jerry")) (test-dir-match "jerr?"))
@@ -641,8 +641,8 @@
 (ensure-shell '("foogolight"  "foogolightly"  "golight")
               (list (string-append "cd " test-dir2-base)
                     "/bin/ls *o[l]*"))
-(ensure-shell '(6 28) '("load /home/jerry/gosh/testdata/base.gosh"
-                        "load /home/jerry/gosh/testdata/ext.gosh"
+(ensure-shell '(6 28) '("load /Users/jerry/src/github.com/jrryjcksn/gosh/testdata/base.gosh"
+                        "load /Users/jerry/src/github.com/jrryjcksn/gosh/testdata/ext.gosh"
                         "bar"))
 (ensure-shell '("this is a test" "that was a test")
               '("echo this is a test && echo that was a test"))

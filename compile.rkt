@@ -5,10 +5,10 @@
 ;        (only-in racket/stream)
          (only-in racket/set seteq set-member? set-add mutable-set set->list)
          racket/mpair
-                                        ;racket/trace
+                                        racket/trace
          racket/rerequire racket/match
          (only-in racket/string string-replace)
-                                        ;racket/pretty
+         racket/pretty
          parser-tools/lex)
 
 (provide (all-defined-out))
@@ -66,7 +66,7 @@
 (define simple-binops (seteq '+ '- '* '/ '** '!= '== '> '>= '< '<=
                              '+= '++ 'remainder))
 
-(define semidet-binops (seteq '!= '== '> '>= '< '<=))
+(define semidet-binops (seteq '!= '> '>= '< '<=))
 
 (define special-binops (seteq 'and 'or))
 
@@ -85,6 +85,17 @@
     (if (null? (cdr l))
         (car l)
         (loop (cdr l)))))
+
+(define (compile-unify arg1 arg2 cont)
+  (let ([a1 (new-arg)]
+        [a2 (new-arg)])
+    (gcomp
+     arg1
+     `(lambda (,a1)
+        ,(gcomp
+          arg2
+          `(lambda (,a2)
+			 (.gosh-equal-cont ,a1 ,a2 ,cont)))))))
 
 (define (compile-binop op arg1 arg2 cont)
   (let ([a1 (new-arg)]
@@ -243,10 +254,20 @@
        ,(gcomp
          arg
          `(lambda (,arg-val)
-            (if (and (set? ,arg-val) (set-empty? ,results))
-                (set! ,results ,arg-val)
-                (set! ,results (set-add ,results ,arg-val)))))
+            (set! ,results (set-add ,results ,arg-val))))
        (,cont ,results))))
+
+;; (define (compile-set-at arg cont)
+;;   (let ([results (gensym "results-")]
+;;         [arg-val (new-arg)])
+;;     `(let ([,results (set)])
+;;        ,(gcomp
+;;          arg
+;;          `(lambda (,arg-val)
+;;             (if (and (set? ,arg-val) (set-empty? ,results))
+;;                 (set! ,results ,arg-val)
+;;                 (set! ,results (set-add ,results ,arg-val)))))
+;;        (,cont ,results))))
 
 (define (compile-hash-at arg cont)
   (let ([arg-val (new-arg)]
@@ -434,21 +455,20 @@
 
 (define (compile-var-aux name cont stringify)
   (update-numeric-var-information-if-appropriate name)
-  `(,cont ,(cond [(member name (defined-vars))
-                  (if stringify `(.stringify ,name) name)]
-                 [(eq? name '$$)
-                  `(getpid)]
-                 [(eq? name '$?)
-                  `(get-dollar-q)]
-                 [else
-                  (let ([lookup
-                         `(.look-up-free-var
-                           ',(string->symbol
-                              (string-append
-                               (source-module)
-                               ".."
-                               (substring (symbol->string name) 1))))])
-                    (if stringify `(.stringify ,lookup) lookup))])))
+  (cond [(member name (defined-vars))
+         `(,cont (deref ,(if stringify `(.stringify ,name) name)))]
+        [(eq? name '$$)
+         `(,cont `(getpid))]
+        [(eq? name '$?)
+         `(,cont `(get-dollar-q))]
+        [else
+         `(.look-up-free-var
+           ',(string->symbol
+              (string-append
+               (source-module)
+               ".."
+               (substring (symbol->string name) 1)))
+		   ,stringify ,cont)]))
 
 (define (compile-var name cont)
   (compile-var-aux name cont #f))
@@ -498,7 +518,7 @@
   (let* ([arg-val (new-arg)]
          [arg-val2 (new-arg)]
          [bindings (match-up-anon arg-val)])
-    (gcomp
+	(gcomp
      arg
      `(lambda (,arg-val)
         (let ,bindings
@@ -513,15 +533,15 @@
 (define (compile-match-in arg1 pat arg2 cont)
   (let* ([arg-val (new-arg)]
          [bindings (match-up-anon arg-val)])
-    (gcomp
+	(gcomp
      arg1
      `(lambda (,arg-val)
         (let ,bindings
           (match ,arg-val
-                 [,(translate-pattern pat)
-                  ,(parameterize
-                    [(defined-vars (append (pat-vars pat) (defined-vars)))]
-                    (gcomp arg2 cont))]
+            [,(translate-pattern pat)
+             ,(parameterize
+                  [(defined-vars (append (pat-vars pat) (defined-vars)))]
+                (gcomp arg2 cont))]
             [_ #f]))))))
 
 (define (split-at-right lyst count)
@@ -717,21 +737,20 @@
             (defined-vars (append (pat-vars pat) (defined-vars)))]
             (gcomp inexp cont))]
          [filtcode
-          (parameterize ([nesting-level (add1 (nesting-level))])
+          (parameterize [(nesting-level (add1 (nesting-level)))
+						 (defined-vars (append (pat-vars pat) (defined-vars)))]
             `(begin
-              ,(parameterize
-                [(defined-vars (append (pat-vars pat) (defined-vars)))]
-                (gcomp
-                 filtexp
-                 (if is-while
-                     `(lambda (,filt-val)
-                        (set! ,fail #f)
-                        ,incode)
-                     `(lambda (,filt-val)
-                        ,incode))))
+               ,(gcomp
+                filtexp
+                (if is-while
+                    `(lambda (,filt-val)
+                       (set! ,fail #f)
+                       ,incode)
+                    `(lambda (,filt-val)
+                       ,incode)))
                ,(if is-while
-                    `(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
-                    #f)))]
+					`(if ,fail (,ec #f) (begin (set! ,fail #t) #f))
+					#f)))]
          [expcode
           (parameterize
            [(defined-vars
@@ -757,8 +776,6 @@
     (if is-while
         `(call/ec (lambda (,ec) ,expcode))
         expcode)))
-
-;(trace compile-simple-filter compile-full-post compile-match-filter compile-match-in compile-simple-match)
 
 (define (compile-recseq args cont)
   (let* ([oargs (map (lambda (x) `(once ,x)) args)]
@@ -2203,10 +2220,10 @@
            (list 'post arg1 (list '~> pat))
            (list 'in arg2))
      (compile-match-in arg1 pat arg2 cont)]
-    [(list 'post
-           (list 'post arg1 (list '~> pat))
-           (list 'in arg2))
-     (compile-match-in arg1 pat arg2 cont)]
+    ;; [(list 'post
+    ;;        (list 'post arg1 (list '~> pat))
+    ;;        (list 'in arg2))
+    ;;  (compile-match-in arg1 pat arg2 cont)]
     [(list 'fold fun init exp) (compile-fold fun init exp cont)]
     [(list 'fold fun exp) (compile-fold fun #f exp cont)]
     [(list 'racket exp flag) (compile-racket-exp exp flag cont)]
@@ -2218,6 +2235,7 @@
 ;;     (printf "spans: ~s~n" (chunks spans))
      (compile-app fun args expand-strs cont)]
     [(list 'next args) (compile-next args cont)]
+    [(list '== arg1 arg2) (compile-unify arg1 arg2 cont)]
     [(list (and op (? simple-binop?)) arg1 arg2)
      (compile-binop op arg1 arg2 cont)]))
 
@@ -2262,7 +2280,7 @@
 
 (define (gosh-compile exp cont)
   (set! exp (depos exp))
-  (when (getenv "GOSH_PPRINT") (pprint #t))
+;  (when (getenv "GOSH_PPRINT") (pprint #t))
 ;  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))
@@ -2282,12 +2300,13 @@
 
 (define (gosh-file-compile exp cont)
   (set! exp (depos exp))
-  ;; (when (getenv "GOSH_PPRINT") (pprint #t))
-  ;; (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  (when (getenv "GOSH_PPRINT") (pprint #t))
+  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))]
     (let ([compiled (gcomp exp cont)])
-      ;; (when (pprint)
-      ;;   (pretty-print (simplify compiled)))
+      (when (pprint)
+        (pretty-print (simplify compiled)))
       compiled)))
 
+;(trace gosh-compile compile-simple-filter compile-full-post compile-match-filter compile-match-in compile-simple-match)

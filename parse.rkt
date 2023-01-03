@@ -3,14 +3,23 @@
          parser-tools/lex
          "lex.rkt"
          racket/async-channel
-;         racket/trace
+         racket/trace
          racket/match
          racket/format
+         racket/pretty
          (prefix-in : parser-tools/lex-sre))
 
 (provide (all-defined-out))
 ;; (provide parse rparse rlex gosh token-EOF var var-name var?
 ;;          extract-regexp-field-names)
+
+(define (ppwrap . things-to-pprint)
+  (for ([item (in-list things-to-pprint)])
+       (pretty-print item (current-error-port)))
+  (let loop ([l things-to-pprint])
+    (if (null? (cdr l))
+        (car l)
+        (loop (cdr l)))))
 
 (struct var (name [seen #:mutable]) #:transparent)
 (struct pos (val pos) #:transparent)
@@ -493,29 +502,55 @@
           `(bracefun ,$2 ,$1-start-pos ,$3-end-pos)]
          [(LBRACE ~> pat RBRACE) `(bracefun (~> ,$3) ,$1-start-pos ,$4-end-pos)]
          [(LPAR exp RPAR) $2])
-    (assoc [(exp => exp) (list 'assoc $1 $3)])
-    (pat [(VAR) $1]
-         [(VAR = LPAR pat RPAR) `(and ,$4 ,$1)]
-         [(NUM) $1]
-         [(STRBOUND STRBOUND) ""]
-         [(STRBOUND STR STRBOUND)
-          (translate-globs $2)]
-         [(ATOM) $1]
-         [(SYMBOL) $1]
-         [(DOLLAR STRBOUND STR STRBOUND)
-          (let-values ([(vars pat) (extract-regexp-field-names $3)])
-            `(pregexp ,pat (list _ ,@vars)))]
-         [(DOLLAR ATOM)
-          (let-values ([(vars pat) (extract-regexp-field-names $2)])
-            `(pregexp ,pat (list _ ,@vars)))]
-         [(_) '_]
-         [(assoc-pat) `(vector ,@$1)]
-         [(list-pat) $1]
-         [(tuple-pat) $1]
-         [(hash-pat) $1]
-         [(set-pat) $1]
-         [(LPAR pat RPAR) $2])
-    (assoc-pat [(pat => pat) (list $1 $3)])
+    (assoc [(exp => exp) `(assoc ,$1 ,$3)])
+    (pat [(lvarpat) `(or ,(car $1) (lvar (? (.assign-var ',(cadr $1)))))]
+		 [(constraintpat) `(or (lvar (? .constrain-var)) ,$1)]
+		 [(nonlvarpat) $1])
+	(nonlvarpat [(VAR) $1]
+				[(_) '_]
+				[(LPAR nonlvarpat RPAR) $2]
+				[(VAR = LPAR nonlvarpat RPAR) `(and ,$4 ,$1)])
+	(constraintpat [(DOLLAR STRBOUND STR STRBOUND)
+					(let-values ([(vars pat) (extract-regexp-field-names $3)])
+					  `(pregexp ,pat (list _ ,@vars)))]
+				   [(DOLLAR ATOM)
+					(let-values ([(vars pat) (extract-regexp-field-names $2)])
+					  `(pregexp ,pat (list _ ,@vars)))]
+				   [(STRBOUND STR STRBOUND)
+					(translate-globs $2)])
+	(lvarpat [(NUM) $1]
+			 [(STRBOUND STRBOUND) ""]
+			 [(ATOM) $1]
+			 [(SYMBOL) $1]
+			 [(assoc-pat) $1]
+			 [(list-pat) $1]
+			 [(tuple-pat) $1]
+			 [(hash-pat) $1]
+			 [(set-pat) $1]
+			 [(LPAR lvarpat RPAR) $2]
+			 [(VAR = LPAR lvarpat RPAR) `(and ,$4 ,$1)])
+    ;; (pat [(VAR) $1]
+    ;;      [(VAR = LPAR pat RPAR) `(and ,$4 ,$1)]
+    ;;      [(NUM) $1]
+    ;;      [(STRBOUND STRBOUND) ""]
+    ;;      [(STRBOUND STR STRBOUND)
+    ;;       (translate-globs $2)]
+    ;;      [(ATOM) $1]
+    ;;      [(SYMBOL) $1]
+    ;;      [(DOLLAR STRBOUND STR STRBOUND)
+    ;;       (let-values ([(vars pat) (extract-regexp-field-names $3)])
+    ;;         `(pregexp ,pat (list _ ,@vars)))]
+    ;;      [(DOLLAR ATOM)
+    ;;       (let-values ([(vars pat) (extract-regexp-field-names $2)])
+    ;;         `(pregexp ,pat (list _ ,@vars)))]
+    ;;      [(_) '_]
+    ;;      [(assoc-pat) $1]
+    ;;      [(list-pat) $1]
+    ;;      [(tuple-pat) $1]
+    ;;      [(hash-pat) $1]
+    ;;      [(set-pat) $1]
+    ;;      [(LPAR pat RPAR) $2])
+    (assoc-pat [(pat => pat) `(association ,$1 ,$3)])
     (post [(~> pat) `(~>, $2)]
           [(filter) $1]
           [(&&> exp) `(&&> ,$2)]
@@ -609,6 +644,7 @@
 (define (member-test-fun elements)
   (let* ([no-dots (remove 'dotdotdot elements)]
          [includes-dots? (not (= (length elements) (length no-dots)))]
+         [set-var-in (gensym "set-in")]
          [set-var (gensym "set-")]
          [tests (map (lambda (element)
                        `(set-member? ,set-var ,element))
@@ -617,7 +653,7 @@
                         tests
                         (cons `(= (set-count ,set-var) ,(length no-dots))
                               tests))])
-    `(lambda (,set-var) (and (set? ,set-var) ,@all-tests))))
+    `(lambda (,set-var-in) (define ,set-var (deref ,set-var-in)) (and (set? ,set-var) ,@all-tests))))
 
 (define (process-tilde exp)
   (match exp
@@ -784,7 +820,7 @@
                (loop res)]
               [else (loop (cons tok res))])))))
 
-;(trace gosh)
+;;(trace gosh)
 
 ;; (define (gosh input)
 ;;   (define port (if (string? input) (open-input-string input) input))
