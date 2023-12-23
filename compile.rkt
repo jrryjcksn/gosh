@@ -6,7 +6,7 @@
          (only-in racket/set seteq set-member? set-add mutable-set set->list)
          racket/mpair
                                         racket/trace
-         racket/rerequire racket/match
+         racket/rerequire racket/match (only-in racket/list remove-duplicates)
          (only-in racket/string string-replace)
          racket/pretty
          parser-tools/lex)
@@ -85,6 +85,39 @@
     (if (null? (cdr l))
         (car l)
         (loop (cdr l)))))
+
+(define (compile-dcg desc name pat-in guard exp-in sp ep cont)
+  (let* ([pat-and-vars (add-pat-chain-vars pat-in)]
+		 [new-exp (apply add-exp-chain-vars exp-in (cdr pat-and-vars))])
+	(ppwrap 'XXXXXXXXXXXXXXX (list pat-and-vars new-exp))
+	(gcomp `(function-clause (,desc ,name ,(car pat-and-vars), guard #f ,new-exp) ,sp ,ep) cont)))
+
+(define (add-pat-chain-vars pat)
+  (define in-var (gensym "in-"))
+  (define out-var (gensym "out-"))
+
+  (list (to-pat (if (equal? pat ''())
+					(list in-var out-var)
+					(append pat (list in-var out-var))))
+		in-var out-var))
+
+(define (to-pat p)
+  (cond [(equal? p ''()) ''()]
+		[(equal? p '()) ''()]
+		[else
+		 `(or (cons ,(car p) ,(to-pat (cdr p)))
+			  (? .force (mcons ,(car p) ,(to-pat (cdr p)))))]))
+
+(define (add-exp-chain-vars exp in out)
+  (match exp
+	[(list 'and exp1 exp2) (let ([next (gensym "chain-")])
+							 `(and ,(add-exp-chain-vars exp1 in next)
+								   ,(add-exp-chain-vars exp2 next out)))]
+	[(list 'or exp1 exp2) `(or ,(add-exp-chain-vars exp1 in out)
+							   ,(add-exp-chain-vars exp2 in out))]
+	[(list 'nondcg exp) exp]
+	[(list 'terminal val) `(== ,in (list* ,val ,out))]
+	[(list 'app name args _) `(app ,name ,(append args (list in out)))]))
 
 (define (compile-unify arg1 arg2 cont)
   (let ([a1 (new-arg)]
@@ -381,7 +414,8 @@
                  `(lambda (,arg-val2)
                     (unless (or (pair? ,arg-val2)
                                 (mpair? ,arg-val2)
-                                (null? ,arg-val2))
+                                (null? ,arg-val2)
+								(lvar? ,arg-val2))
                       (error (format "Invalid list tail -- ~s"
                                      ,arg-val2)))
                     (,cont ,(make-mcons-chain
@@ -455,7 +489,7 @@
 
 (define (compile-var-aux name cont stringify)
   (update-numeric-var-information-if-appropriate name)
-  (cond [(member name (defined-vars))
+  (cond [(member name (ppwrap 'defined (defined-vars)))
          `(,cont (deref ,(if stringify `(.stringify ,name) name)))]
         [(eq? name '$$)
          `(,cont `(getpid))]
@@ -503,12 +537,18 @@
       (var? item)))
 
 (define (pat-vars pat)
-  (cond [(pair? pat) (append (pat-vars (car pat)) (pat-vars (cdr pat)))]
-        [(is-pat-var? pat)
-         (if (symbol? pat)
-             (list pat)
-             (list (var-name pat)))]
-        ['()]))
+  (define (aux pat)
+	(cond [(pair? pat) (append (pat-vars (car pat)) (pat-vars (cdr pat)))]
+          [(is-pat-var? pat)
+           (if (symbol? pat)
+               (list pat)
+               (list (var-name pat)))]
+          [else '()]))
+  (define (nav pat)
+	(cond [(set-member? (patvals) pat) (aux pat)]
+		  [(pair? pat) (append (nav (car pat)) (nav (cdr pat)))]
+		  [else '()]))
+  (remove-duplicates (nav pat)))
 
 (define (hash-exp pat)
   (let ([vars (pat-vars pat)])
@@ -1284,7 +1324,12 @@
   (let* ([gosh-name-str (string-append ".." namestr)]
          [gosh-name (string->symbol gosh-name-str)]
          [clause-name (gensym (string-append gosh-name-str "-"))]
-         [arg-name (new-arg)]
+		 [.trail-list '()]
+		 [.trail (lambda (x y) (set! .trail-list (cons (list x y) .trail-list)))]
+		 [.untrail (lambda () (for [(item .trail-list)]
+								   (if (procedure? (cadr item))
+									   (remove-constraint! (car item) (cadr item))
+									   (unbind! (car item)))))]
          [prev-var (gensym "prev-")]
          [prev-funobj (gensym "prev-funobj-")]
          [cont-var (gensym "cont-")]
@@ -1313,6 +1358,7 @@
                                (when ,matched-var (vector-set! ,matched-var 0 #t))
                                ,(pipe-compile pipe exp #f cont-var)]
                               [_ #f])
+					   (.untrail)
                        (,prev-var ,cont-var $* ,matched-var))])
                                         ;             (init-clause-name ',clause-name)
                                         ;             (set-func! ',clause-name ,clause)
@@ -2196,6 +2242,12 @@
            start end)
      (compile-func-clause discriminator name pat (and guard (cadr guard))
                           pipe exp start end cont)]
+    [(list 'function-clause
+           (list 'dcgfunc (and discriminator (or '=! '<! '>! '<? '>? '>~))
+                 name pat guard exp)
+           start end)
+     (compile-dcg discriminator name pat (and guard (cadr guard))
+                  exp start end cont)]
     [(list 'fun name pat guard pipe exp)
      (compile-anon-func name pat (and guard (cadr guard)) pipe exp cont)]
     [(list 'bracefun exp start end) (compile-bracefun exp start end cont)]
@@ -2309,4 +2361,4 @@
         (pretty-print (simplify compiled)))
       compiled)))
 
-;(trace gosh-compile compile-simple-filter compile-full-post compile-match-filter compile-match-in compile-simple-match)
+;;(trace gosh-compile compile-simple-filter compile-full-post compile-match-filter compile-match-in compile-simple-match compile-dcg compile-func-clause to-pat)

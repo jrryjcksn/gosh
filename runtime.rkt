@@ -559,13 +559,22 @@
     (and (not (eq? val .channel-empty))
          (begin (cont val) (.sendin cont)))))
 
-(struct lvar ([val #:mutable]) #:transparent)
+(struct lvar ([val #:mutable] [constraints #:mutable]) #:transparent)
 
 (define *empty-lvar* '#(empty))
 
-(define (make-lvar) (lvar *empty-lvar*))
+(define (make-lvar) (lvar *empty-lvar* '()))
 
-(define (bind! lvar val) (set-lvar-val! lvar val))
+(define (bind! lvar val)
+  (let [(constraints (lvar-constraints lvar))]
+	(unless (or (null? constraints) (for/and [(c constraints)] (c val)))
+	  #f)
+	(set-lvar-val! lvar val)
+	#t))
+
+(define (add-constraint! lvar constraint) (set-lvar-constraints! lvar (cons constraint (lvar-constraints lvar))))
+
+(define (remove-constraint! lvar constraint) (set-lvar-constraints! lvar (remove constraint (lvar-constraints lvar) eq?)))
 
 (define (unbind! lvar) (set-lvar-val! lvar *empty-lvar*))
 
@@ -581,7 +590,7 @@
 
 (define (src-deref-all x)
   (match x
-	[(struct lvar (val)) (if (eq? val *empty-lvar*) x (src-deref-all val))]
+	[(struct lvar (val _)) (if (eq? val *empty-lvar*) x (src-deref-all val))]
 	[(or (? mpair?) (? pair?)) (mcons (src-deref-all (.car x)) (src-deref-all (.cdr x)))]
 	[else x]))
 
@@ -608,47 +617,48 @@
 	(define x (deref xin))
 	(define y (deref yin))
 
-	(cond [(lvar? x)
-		   (bind! x y)
-		   (trail x)]
-		  [(lvar? y)
-		   (bind! y x)
-		   (trail y)]
-		  [(or (number? x)
-               (string? x)
-               (symbol? x)
-               (char? x)
-               (boolean? x)
-               (pregexp? x)
-               (set? x)
-               (null? x))
-           (equal? x y)]
-          [(association? x) (and (association? y)
-								 (eq-impl (association-key x)
-                                               (association-key y))
-								 (eq-impl (association-val x)
-                                               (association-val y)))]
-          [(hash? x) (and (hash? y)
-                          (= (hash-count x) (hash-count y))
-                          (andmap
-                           (lambda (k)
-							 (and (hash-has-key? y k)
-                                  (eq-impl (hash-ref x k) (hash-ref y k))))
-                           (hash-keys x)))]
-          [(vector? x)
-           (and (vector? y)
-				(let ([xlen (vector-length x)])
-                  (and (= xlen (vector-length y))
-                       (let loop ([i 0])
-						 (cond [(>= i xlen) #t]
-                               [(eq-impl (vector-ref x i) (vector-ref y i))
-								(loop (add1 i))]
-                               [else #f])))))]
-          [(or (pair? x) (mpair? x))
-           (and (or (pair? y) (mpair? y))
-				(eq-impl (.ghead x) (.ghead y))
-				(eq-impl (.gtail x) (.gtail y)))]
-          [else #f]))
+	(let/ec bail
+	  (cond [(lvar? x)
+			 (unless (bind! x y) (bail #f))
+			 (trail x)]
+			 [(lvar? y)
+			  (unless (bind! y x) (bail #f))
+			  (trail y)]
+			 [(or (number? x)
+				  (string? x)
+				  (symbol? x)
+				  (char? x)
+				  (boolean? x)
+				  (pregexp? x)
+				  (set? x)
+				  (null? x))
+			  (equal? x y)]
+			 [(association? x) (and (association? y)
+									(eq-impl (association-key x)
+                                             (association-key y))
+									(eq-impl (association-val x)
+                                             (association-val y)))]
+			 [(hash? x) (and (hash? y)
+							 (= (hash-count x) (hash-count y))
+							 (andmap
+							  (lambda (k)
+								(and (hash-has-key? y k)
+									 (eq-impl (hash-ref x k) (hash-ref y k))))
+							  (hash-keys x)))]
+			 [(vector? x)
+			  (and (vector? y)
+				   (let ([xlen (vector-length x)])
+					 (and (= xlen (vector-length y))
+						  (let loop ([i 0])
+							(cond [(>= i xlen) #t]
+								  [(eq-impl (vector-ref x i) (vector-ref y i))
+								   (loop (add1 i))]
+								  [else #f])))))]
+			 [(or (pair? x) (mpair? x))
+			  (and (or (pair? y) (mpair? y))
+				   (eq-impl (.ghead x) (.ghead y))
+				   (eq-impl (.gtail x) (.gtail y)))]
+			 [else #f])))
 
   (when (eq-impl xin yin)
 	(cont (deref xin)))
@@ -672,7 +682,8 @@
   (unless (not (mpair? glist))
           (let ([the-tail (mcdr glist)])
             (when (box? the-tail)
-                  (set-mcdr! glist (reset ((unbox the-tail)))))))
+;;                  (set-mcdr! glist (reset ((unbox the-tail)))))))
+              (set-mcdr! glist ((unbox the-tail))))))
   #t)
 
 (define (.possibly-stringify x)
@@ -739,7 +750,8 @@
 				  (let ([result
 						 (if (box? the-tail)
 							 (begin
-							   (let ([new-tail (reset ((unbox the-tail) #f))])
+;;							   (let ([new-tail (reset ((unbox the-tail) #f))])
+							   (let ([new-tail ((unbox the-tail))])
 								 (set-mcdr! glist new-tail)
 								 new-tail))
 							 the-tail)])
@@ -1355,7 +1367,7 @@
          (.gosh-fprint-aux out left 0 (add1 depth))
          (fprintf out "=>")
          (.gosh-fprint-aux out right 0 (add1 depth))]
-		[(struct lvar (val))
+		[(struct lvar (val _))
 		 (if (eq? val *empty-lvar*)
 			   (fprintf out "<any>")
 			   (.gosh-fprint-aux out val 0 depth))]
@@ -1796,50 +1808,89 @@
       (.gosh-fprint (current-output-port) val)))
 
 (define (.chunked-lazy-list thunk chunk-size cont)
-  (let* ([results (mcons '() '())]
-         [tail results]
-         [count 0]
-         [val (reset
-               (thunk
-                (lambda (arg-val)
-                  (set! count (add1 count))
-                  (set-mcdr! tail (mcons arg-val '()))
-                  (set! tail (mcdr tail))
-                  (when (>= count chunk-size)
-                        (shift ret
-                               (set-mcdr! tail (box ret))
-                               (let ([ret-val (mcdr results)])
-                                 (set! results (mcons '() '()))
-                                 (set! tail results)
-                                 ret-val)))))
-               (mcdr results))])
-    (cont val)))
+  (letrec ([results (mlist #f)]
+           [tail results]
+           [count 0]
+           [val (generator ()
+						   (thunk
+							(lambda (arg-val)
+							  (set! count (add1 count))
+							  (set-mcdr! tail (mlist arg-val))
+							  (set! tail (mcdr tail))
+							  (when (>= count chunk-size)
+								(set! count 0)
+								(set-mcdr! tail (box val))
+								(yield tail))))
+						   (yield '()))])
+    (cont (val))))
+;; (define (.chunked-lazy-list thunk chunk-size cont)
+;;   (let* ([results (mcons '() '())]
+;;          [tail results]
+;;          [count 0]
+;;          [val (reset
+;;                (thunk
+;;                 (lambda (arg-val)
+;;                   (set! count (add1 count))
+;;                   (set-mcdr! tail (mcons arg-val '()))
+;;                   (set! tail (mcdr tail))
+;;                   (when (>= count chunk-size)
+;;                         (shift ret
+;;                                (set-mcdr! tail (box ret))
+;;                                (let ([ret-val (mcdr results)])
+;;                                  (set! results (mcons '() '()))
+;;                                  (set! tail results)
+;;                                  ret-val)))))
+;;                (mcdr results))])
+;;     (cont val)))
 
 (define (.pipe-list chunk-size)
-  (let* ([results (mcons '() '())]
-         [tail results]
-         [count 0]
-         [val (reset
-               (let loop ([item (.in)])
-                 (if (not (eq? item .channel-empty))
-                     (begin
-                       (set! count (add1 count))
-                       (set-mcdr! tail (mcons item '()))
-                       (set! tail (mcdr tail))
-                       (when (>= count chunk-size)
-                             (shift ret
-                                    (set-mcdr! tail (box ret))
-                                    (let ([ret-val (mcdr results)])
-                                      (set! results (mcons '() '()))
-                                      (set! tail results)
-                                      ret-val)))
-                       (loop (.in)))
-                     (begin
-                       (thread-cell-set! .stdin #f)
-                       '())))
-               (mcdr results))])
-    (thread-cell-set! .pipelist val)
-    val))
+  (letrec ([results (mlist #f)]
+           [tail results]
+           [count 0]
+           [val (generator ()
+						   (let loop ([item (.in)])
+							 (if (not (eq? item .channel-empty))
+								 (begin
+								   (set! count (add1 count))
+								   (set-mcdr! tail (mlist item))
+								   (set! tail (mcdr tail))
+								   (when (>= count chunk-size)
+									 (set! count 0)
+									 (set-mcdr! tail (box val))
+									 (yield tail))
+								   (loop (.in)))
+								 (begin
+								   (thread-cell-set! .stdin #f)
+								   '())))
+						   (mcdr results))]
+		   [init-val (val)])
+    (thread-cell-set! .pipelist init-val)
+    init-val))
+;; (define (.pipe-list chunk-size)
+;;   (let* ([results (mcons '() '())]
+;;          [tail results]
+;;          [count 0]
+;;          [val (reset
+;;                (let loop ([item (.in)])
+;;                  (if (not (eq? item .channel-empty))
+;;                      (begin
+;;                        (set! count (add1 count))
+;;                        (set-mcdr! tail (mcons item '()))
+;;                        (set! tail (mcdr tail))
+;;                        (when (>= count chunk-size)
+;;                              (shift ret
+;;                                     (set-mcdr! tail (box ret))
+;;                                     (let ([ret-val (mcdr results)])
+;;                                       (set! results (mcons '() '()))
+;;                                       (set! tail results)
+;;                                       ret-val)))
+;;                        (loop (.in)))
+;;                      (begin
+;;                        (thread-cell-set! .stdin #f)
+;;                        '())))
+;;                (mcdr results))])
+;;     (thread-cell-set! .pipelist val)
+;;     val))
 
 (define (gre regexp)
   (let-values ([(vars pat) (extract-regexp-field-names regexp)])

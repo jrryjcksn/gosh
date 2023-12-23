@@ -4,6 +4,7 @@
          "lex.rkt"
          racket/async-channel
          racket/trace
+         racket/set
          racket/match
          racket/format
          racket/pretty
@@ -20,6 +21,10 @@
     (if (null? (cdr l))
         (car l)
         (loop (cdr l)))))
+
+(define patvals (make-parameter #f))
+
+(define (patval val) (set-add! (patvals) val) val)
 
 (struct var (name [seen #:mutable]) #:transparent)
 (struct pos (val pos) #:transparent)
@@ -140,6 +145,7 @@
           (right &&. AMPAMP)
           (right PIPE PIPEAMP)
           (nonassoc =>)
+          (nonassoc ==>)
           (left XOR)
           (left OR)
           (left &&)
@@ -268,18 +274,30 @@
      ;; [(PIPEPIPE cmd) `(||. ,$2)]
      [() (pos '() '())])
     (function-clause
-     [(=! ATOM arg-pat guard pipe exp)
-      `(=! ,$2 ,$3 ,$4 ,$5, $6)]
-     [(<! ATOM arg-pat guard pipe exp)
-      `(<! ,$2 ,$3 ,$4 ,$5, $6)]
-     [(>! ATOM arg-pat guard pipe exp)
-      `(>! ,$2 ,$3 ,$4 ,$5, $6)]
-     [(<? ATOM arg-pat guard pipe exp)
-      `(<? ,$2 ,$3 ,$4 ,$5, $6)]
-     [(>? ATOM arg-pat guard pipe exp)
-      `(>? ,$2 ,$3 ,$4 ,$5, $6)]
-     [(>~ ATOM arg-pat guard pipe exp)
-      `(>~ ,$2 ,$3 ,$4 ,$5, $6)])
+     [(desc ATOM arg-pat guard pipe exp)
+	  `(,$1 ,$2 ,$3 ,$4 ,$5, $6)]
+	 [(desc ATOM @ simple-list-pat guard -> dcgexp)
+	  (make-func $1 $2 $4 $5 $7)])
+	(desc
+     [(=!) '=!]
+     [(<!) '<!]
+     [(>!) '>!]
+	 [(<?) '<?]
+     [(>?) '>?]
+	 [(>~) '>~])
+    ;; (function-clause
+    ;;  [(=! ATOM arg-pat guard pipe exp)
+    ;;   `(=! ,$2 ,$3 ,$4 ,$5, $6)]
+    ;;  [(<! ATOM arg-pat guard pipe exp)
+    ;;   `(<! ,$2 ,$3 ,$4 ,$5, $6)]
+    ;;  [(>! ATOM arg-pat guard pipe exp)
+    ;;   `(>! ,$2 ,$3 ,$4 ,$5, $6)]
+    ;;  [(<? ATOM arg-pat guard pipe exp)
+    ;;   `(<? ,$2 ,$3 ,$4 ,$5, $6)]
+    ;;  [(>? ATOM arg-pat guard pipe exp)
+    ;;   `(>? ,$2 ,$3 ,$4 ,$5, $6)]
+    ;;  [(>~ ATOM arg-pat guard pipe exp)
+    ;;   `(>~ ,$2 ,$3 ,$4 ,$5, $6)])
     (guard [(WHEN exp) `(when (once ,$2))]
            [() #f])
     (pipe [(PIPEIN pat ->) $2]
@@ -289,6 +307,15 @@
           [(->) #f])
     (function-clause-pop
      [(:! ATOM DOT) `(:! ,$2)])
+	(terminal [(NUM) `(terminal ,$1)]
+			   [(ATOM) `(terminal ,$1)]
+			   [(SYMBOL) `(terminal ,$1)]
+			   [(CHAR) `(terminal ,$1)])
+	(dcgexp [(ATOM list) (prec APP) `(app ,$1 ,$2 #f)]
+			[(LBRACE LBRACE exp LBRACE LBRACE) `(nondcg ,$3)]
+			[(terminal) $1]
+			[(dcgexp OR dcgexp) `(or ,$1 ,$3)]
+			[(dcgexp && dcgexp) `(and ,$1 ,$3)])
     (exp [(NUM) $1]
          [(ATOM) `(atom ,$1)]
          [(SYMBOL) `(symbol ,$1)]
@@ -503,9 +530,9 @@
          [(LBRACE ~> pat RBRACE) `(bracefun (~> ,$3) ,$1-start-pos ,$4-end-pos)]
          [(LPAR exp RPAR) $2])
     (assoc [(exp => exp) `(assoc ,$1 ,$3)])
-    (pat [(lvarpat) `(or ,(car $1) (lvar (? (.assign-var ',(cadr $1)))))]
-		 [(constraintpat) `(or (lvar (? .constrain-var)) ,$1)]
-		 [(nonlvarpat) $1])
+    (pat [(lvarpat) (patval `(or ,$1 (lvar (? (.constrain-var ,(make-assign-function $1))) _)))]
+		 [(constraintpat) (patval `(or ,$1 (lvar (? (.constrain-var ,(make-constraint-function $1))) _)))]
+		 [(nonlvarpat) (patval $1)])
 	(nonlvarpat [(VAR) $1]
 				[(_) '_]
 				[(LPAR nonlvarpat RPAR) $2]
@@ -517,16 +544,17 @@
 					(let-values ([(vars pat) (extract-regexp-field-names $2)])
 					  `(pregexp ,pat (list _ ,@vars)))]
 				   [(STRBOUND STR STRBOUND)
-					(translate-globs $2)])
+					(translate-globs $2)]
+				   [(assoc-pat) $1]
+				   [(list-pat) $1]
+				   [(tuple-pat) $1]
+				   [(hash-pat) $1]
+				   [(set-pat) $1]
+				   [(VAR = LPAR constraintpat RPAR) `(and ,$4 ,$1)])
 	(lvarpat [(NUM) $1]
 			 [(STRBOUND STRBOUND) ""]
 			 [(ATOM) $1]
 			 [(SYMBOL) $1]
-			 [(assoc-pat) $1]
-			 [(list-pat) $1]
-			 [(tuple-pat) $1]
-			 [(hash-pat) $1]
-			 [(set-pat) $1]
 			 [(LPAR lvarpat RPAR) $2]
 			 [(VAR = LPAR lvarpat RPAR) `(and ,$4 ,$1)])
     ;; (pat [(VAR) $1]
@@ -635,13 +663,17 @@
                    [(COMMA DOTDOTDOT RBRACK) '_]
                    [(COMMA pat list-pat-tail)
                     `(or (cons ,$2 ,$3) (? .force (mcons ,$2 ,$3)))])
+	(simple-list-pat [(list-pat) (if (ends-with-non-nil $1)
+									 (raise-arguments-error 'parse "Invalid simple list pattern"
+															"pattern" $1)
+									 $1)])
     (arg-pat [(VAR) $1]
              [(VAR = LPAR pat RPAR) `(and ,$4 ,$1)]
              [(LPAR pat RPAR) $2]
              [(tuple-pat) $1]
              [(list-pat) $1]))))
 
-(define (member-test-fun elements)
+  (define (member-test-fun elements)
   (let* ([no-dots (remove 'dotdotdot elements)]
          [includes-dots? (not (= (length elements) (length no-dots)))]
          [set-var-in (gensym "set-in")]
@@ -804,7 +836,6 @@
 (define (cflatten exp)
   (match exp
     [(cons ':: rest) rest]
-
     [_ (list exp)]))
 
 (define (gosh input read-state)
@@ -891,4 +922,28 @@
 
 (define (list->symbol l)
   (string->symbol (list->string l)))
+
+(define (make-constraint-function exp)
+  (let [(var (gensym "arg"))
+		(val (gensym "arg"))]
+	`(lambda (,var) (add-constraint! ,var (lambda (,val) (match ,val [,exp #t]))))))
+
+(define (make-assign-function val)
+  (let [(lvar (gensym "arg"))]
+	`(lambda (,lvar)
+	   (when (bind! ,lvar ,val)
+		 (.trail ,lvar)
+		 #t))))
+
+(define (.constrain-var func)
+  (lambda (x) (func x) #t))
+
+(define (make-func desc name pat guard exp)
+  `(dcgfunc ,desc ,name ,pat ,guard ,exp))
+
+(define (ends-with-non-nil pat)
+  (match pat
+	[''() #f]
+	[(list 'or '() _ _) #t]
+	[(list 'or (cons _ y) _) (ends-with-non-nil y)]))
 

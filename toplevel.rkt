@@ -1015,6 +1015,7 @@
              (parameterize
               [(current-custodian cust)
                (current-directory .pwd)
+			   [patvals (mutable-seteq)]
                (current-exp-string exp)]
               (local-custodian cust)
               (when (and (equal? read-state 'default)
