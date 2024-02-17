@@ -679,7 +679,7 @@
                       (list e)))
                 exported-sym-list))])
       (write `(require racket/match
-                       (only-in racket/set set? set-count)
+                       (only-in racket/set set set-empty? set-add set? set-count)
                        (only-in racket/string string-trim)
                        (only-in racket/port with-output-to-string)
                        (file ,(root-path "runtime.rkt"))

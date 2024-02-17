@@ -1,4 +1,3 @@
-
 #lang racket/base
 
 (require "parse.rkt" "runtime.rkt" (except-in racket/control set)
@@ -451,6 +450,7 @@
                     (if stringify `(.stringify ,lookup) lookup))])))
 
 (define (compile-var name cont)
+;  (eprintf "name ~s, defined-vars: ~s~%" name (defined-vars))
   (compile-var-aux name cont #f))
 
 (define (compile-if test t e cont)
@@ -1277,7 +1277,8 @@
          [clause (gensym "clause-")])
     (parameterize
      [(defined-vars
-        (append (pat-vars pat) (pat-vars pipe) (pat-vars exp) (defined-vars)))]
+;        (append (pat-vars pat) (pat-vars pipe) (pat-vars exp) (defined-vars)))]
+        (append (pat-vars pat) (pat-vars pipe) (defined-vars)))]
      (when (exports)
            (exports (set-add (exports) gosh-name)))
      (case discriminator
@@ -2277,7 +2278,7 @@
 (define (gosh-compile exp cont)
   (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
-  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp (current-error-port)))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))
                  (app-refs '())
@@ -2285,7 +2286,7 @@
                  (top-level-vars (mutable-set))]
     (let ([compiled (gcomp exp cont)])
       (when (pprint)
-        (pretty-print (simplify compiled)))
+        (pretty-print (simplify compiled) (current-error-port)))
       `(begin
          ,@(map (lambda (v) `(define ,v #f)) (set->list (top-level-vars)))
          (for-each .set-up-external-prog-lookup! ',(app-refs))
@@ -2297,11 +2298,12 @@
 (define (gosh-file-compile exp cont)
   (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
-  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp (current-error-port)))
   (parameterize [(dets (make-hasheq))
-                 (semidets (make-hasheq))]
+                 (semidets (make-hasheq))
+                 (defined-vars '())]
     (let ([compiled (gcomp exp cont)])
       (when (pprint)
-        (pretty-print (simplify compiled)))
+        (pretty-print (simplify compiled) (current-error-port)))
       compiled)))
 
