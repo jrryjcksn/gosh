@@ -18,7 +18,7 @@
            COLONLPAR COLONLBRACK DOTLPAR DOTLBRACK SETAT HASHAT STRAT CASE OF
            LOOP WITH HASHANON TO BY FROM &&> \|\|> IMPORT EXCEPT ONLY TRUE
            FALSE PIPEPIPE PIPEAMP = + - * / <. ^ ** // //* @ @* @: &+ & $ _ ::
-           && &&. ||. &/ OR XOR ! != == > >= < <= ~ ~~ ~> <~ : :~> =! <! >! <?
+           && &&. ||. &/ OR XOR ! != == > >= < <= ~ ~~ ~> <~ : ==> =! ==!! <! >! <?
            >? >~ :! => -> <- -= += ++ UPPIPEIN))
 
 (define-tokens value-tokens (NUM ATOM FUNKYATOM VAR STR CHAR ANON SEQVAR REGEX
@@ -99,8 +99,9 @@
        ("~>" ~>)
        ("<~" <~)
        (":" :)
-       (":~>" :~>)
+       ("==>" ==>)
        ("=!" =!)
+       ("==!!" ==!!)
        ("<!" <!)
        (">!" >!)
        ("<?" <?)
@@ -480,6 +481,9 @@
            (start-token)
            (pos-token 'EOF)]
           [#\# (next comment)]
+          [#\i
+           (start-token)
+           (accumulate-and-switch-state imag-unit-or-atom)]
           [(or #\space #\tab #\newline) (next start)]
           [(? char-numeric?)
            (start-token)
@@ -701,8 +705,8 @@
             (backward 1)
             (accumulate-and-switch-state simple-racket)]))
 
-  (define (token-ends-with? ch)
-    (define str (collect-chars))
+  (define (token-ends-with? str ch)
+;    (define str (collect-chars))
     (log-mllex-debug "token-ends-with?: ~s" str)
     (eqv? (string-ref str (sub1 (string-length str))) ch))
 
@@ -1058,7 +1062,23 @@
        (next str-dollar)]
       [#\\
        (next-char)
-       (accumulate-and-switch-state str)]
+	   (match ch
+		 [#\n
+		  (accumulate #\newline)
+		  (next str)]
+		 [#\r
+		  (accumulate #\return)
+		  (next str)]
+		 [#\t
+		  (accumulate #\tab)
+		  (next str)]
+		 [#\b
+		  (accumulate #\backspace)
+		  (next str)]
+		 [#\s
+		  (accumulate #\space)
+		  (next str)]
+		 [_ (accumulate-and-switch-state str)])]
       [(? str-bound?)
        (log-mllex-debug "IN STR -- bounds: ~s, modes: ~s~n"
                         str-bound-stack modes)
@@ -1596,6 +1616,15 @@
             [else 0]))
     (edc (sub1 (string-length str))))
 
+  (define (imag-unit-or-atom)
+    (match ch
+      [(and (? char?)
+            (or (? char-alphabetic?)
+                (? char-numeric?)
+                #\_))
+       (accumulate-and-switch-state atom)]
+      [_ (imag-token)]))
+
   (define (atom)
     (enter 'atom ch)
     (match ch
@@ -1605,14 +1634,14 @@
                 #\_ #\/ #\. #\- #\+))
        (accumulate-and-switch-state atom)]
       [_
-       (if (token-ends-with? #\.)
-           (let* ([tokstr (collect-chars)]
-                  [dotcount (ending-dot-count tokstr)])
-             (backward dotcount)
-             (pause mode)
-             (explicit-atom-token
-              (substring tokstr 0 (- (string-length tokstr) dotcount))))
-           (finish-token atom-token))]))
+       (let ([tokstr (collect-chars)])
+         (if (token-ends-with? tokstr #\.)
+             (let ([dotcount (ending-dot-count tokstr)])
+               (backward dotcount)
+               (pause mode)
+               (explicit-atom-token
+                (substring tokstr 0 (- (string-length tokstr) dotcount))))
+             (finish-token atom-token)))]))
 
   (define (num)
     (enter 'num ch)
@@ -1856,3 +1885,4 @@
                            (one-line-pos (token-GT) 30 31)
                            (one-line-pos (token-GTGT) 32 34)
                            (one-line-pos (token-AMP) 35 36)))
+;(trace mllex)

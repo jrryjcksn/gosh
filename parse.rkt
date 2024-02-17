@@ -2,6 +2,7 @@
 (require parser-tools/yacc
          parser-tools/lex
          "lex.rkt"
+         racket/pretty
          racket/async-channel
 ;         racket/trace
          racket/match
@@ -134,7 +135,7 @@
           (left XOR)
           (left OR)
           (left &&)
-          (nonassoc :~>)
+          (nonassoc ==>)
           (nonassoc //)
           (nonassoc //*)
           (nonassoc &/)
@@ -330,7 +331,7 @@
          [(exp REM exp) `(remainder ,$1 ,$3)]
          [(exp ** exp) `(** ,$1 ,$3)]
          [(to-exp) $1]
-         [(:~> VAR <- exp) `(:~> ,$2 ,$4)]
+         [(==> VAR <- exp) `(==> ,$2 ,$4)]
          [(! exp) `(! ,$2)]
          [(~ exp) `(~ ,$2)]
          [(~~ exp) `(~~ ,$2)]
@@ -647,10 +648,10 @@
   (define fun-app `(app ,fun (list ,@args) #t))
   (cond [(and (null? args) (null? tail))
          (match fun
-                [(pregexp #px"^([[:word:]]+)=(.+)$" (list _ var val))
+                [(pregexp #px"^([[:word:] [:digit:]]+)=(.+)$" (list _ var val))
                  `(assignment ,var ,val)]
                 [(list 'strexps
-                       (list (pregexp #px"^([[:word:]]+)=$"
+                       (list (pregexp #px"^([[:word:] [:digit:]]+)=$"
                                       (list _ var))
                              val))
                  `(assignment ,var
@@ -660,7 +661,7 @@
                                       [_ val]))]
                 [(list 'word-split
                        (list 'atomexps
-                             (list (pregexp #px"^([[:word:]]+)=$"
+                             (list (pregexp #px"^([[:word:] [:digit:]]+)=$"
                                             (list _ var))
                                    val)))
                  `(assignment ,var
@@ -673,10 +674,10 @@
                 [_ fun-app])]
         [(null? tail)
          (match fun
-                [(pregexp #px"^([[:word:]]+)=$" (list _ var))
+                [(pregexp #px"^([[:word:][:digit:]]+)=$" (list _ var))
                  `(assignment ,var ,(car args))]
                 [(list 'strexps
-                       (list (pregexp #px"^([[:word:]]+)=$"
+                       (list (pregexp #px"^([[:word:] [:digit:]]+)=$"
                                       (list _ var))))
                  `(assignment ,var
                               ,(match (car args)
@@ -685,7 +686,7 @@
                                       [_ (car args)]))]
                 [(list 'word-split
                        (list 'atomexps
-                             (list (pregexp #px"^([[:word:]]+)=$"
+                             (list (pregexp #px"^([[:word:] [:digit:]]+)=$"
                                             (list _ var)))))
                  `(assignment ,var
                               ,(match (car args)

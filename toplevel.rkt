@@ -130,13 +130,6 @@
           (current-namespace)))
   lib)
 
-;; (define (gosh-exec str)
-;;   (with-input-from-string str exec-impl))
-
-;; (define (quiet-gosh-exec str ns)
-;;   (with-input-from-string str (lambda () (exec-impl ns)))
-;;   (values))
-
 (define (exec-impl [ns gosh-ns] [display #f])
   (let loop ([read-state 'default] [final-results '()])
     (let-values ([(exp token-state new-read-state)
@@ -233,75 +226,6 @@
                       (custodian-shutdown-all cust)
                       (local-custodian #f)))
              (gosh-exec new-read-state))])))
-
-;; (define (gosh-exec [read-state 'default])
-;;   (define in (current-input-port))
-;;   (define out (current-output-port))
-;;     (printf "HERE0!\n")
-;;   (adjust-return-code)
-;;   (let-values ([(exp token-state new-read-state)
-;;                 (gosh-read in read-state)])
-;;     (printf "HERE1!\n")
-;;     (cond [(eof-object? exp) 'done]
-;;           [(or (equal? exp "") (not exp)) (gosh-exec new-read-state)]
-;;           ;;       [(not exp) (repl-aux new-read-state in out)]
-;;           [#t
-;;            (let ([cust (make-custodian)]
-;;                  [is-assignment? #f]) ; if x=<exp>, don't kill custodian
-;;              (parameterize
-;;               [(current-custodian cust)
-;;                (current-directory .pwd)
-;;                (current-exp-string exp)]
-;;               (local-custodian cust)
-;;               (thread
-;;                (lambda ()
-;;                  (with-handlers
-;;                   ([exn?
-;;                     (lambda (err)
-;;                       (reset-toplevel-channel!)
-;;                       (log-error "ERROR: ~a~%" (exn-message err))
-;;                       (async-channel-put .toplevel-chan .channel-empty))])
-;;                   (let ([parsed (gosh exp token-state)])
-;;                     (if parsed
-;;                         (parameterize ([compile-allow-set!-undefined #t]
-;;                                        [.gosh-loader gosh-load]
-;;                                        [.gosh-executer gosh-exec]
-;;                                        [.gosh-compiler compile-gosh-file]
-;;                                        [gosh-namespace (current-namespace)]
-;;                                        [.cmd-success #t])
-;;                                       (match parsed
-;;                                              [(list 'assignment _ _)
-;;                                               (set! is-assignment? #t)]
-;;                                              [_ #t])
-;;                                       (flat-eval
-;;                                        (gosh-compile
-;;                                         parsed
-;;                                         (cont-for-read-state token-state))
-;;                                        (current-namespace))
-;;                                       (async-channel-put .toplevel-chan
-;;                                                          .channel-empty))
-;;                         (async-channel-put .toplevel-chan
-;;                                            .channel-empty)))))))
-;;              (let loop ([val (async-channel-get .toplevel-chan)])
-;;                (when (not (eq? val .channel-empty))
-;;                      (if (and (eq? token-state 'default) (string? val))
-;;                          (fprintf out "~a" val)
-;;                          (.gosh-fprint out val))
-;;                      (cond [(and (eq? token-state 'colon) (not (.loading)))
-;;                             (printf "? ")
-;;                             (let ([input-val (read-line in)])
-;;                               (semaphore-post .toplevel-semaphore)
-;;                               (if (equal? input-val ";")
-;;                                   (loop (async-channel-get .toplevel-chan))
-;;                                   (reset-toplevel-channel!)))]
-;;                            [#t
-;;                             (newline out)
-;;                             (semaphore-post .toplevel-semaphore)
-;;                             (loop (async-channel-get .toplevel-chan))])))
-;;              (unless is-assignment?
-;;                      (custodian-shutdown-all cust)
-;;                      (local-custodian #f)))
-;;            (gosh-exec new-read-state)])))
 
 (define (clean-path path)
   (path->complete-path (simplify-path path)))
@@ -405,9 +329,6 @@
                 #:suffix ".zo")
                compiled-dest
                #t)))
-
-;; (define (rmodname name)
-;;   (string-append name ".rkt"))
 
 (define (gnamestr name)
   (string-append ".." name))
@@ -540,9 +461,9 @@
                         [(list 'import name (list 'except syms))
                          (modsyms-except (gosh-name name) syms)])))))
   (append (if (equal? (path->string (module-being-compiled))
-                      "/home/jerry/gosh/bi.gosh")
+                      (root-path "/bi.gosh"))
               '()
-              (all-mod-syms "/home/jerry/gosh/bi.gosh"))
+              (all-mod-syms (root-path "bi.gosh")))
           (gather imports '())))
 
 (define (translate-imports imports)
@@ -635,9 +556,9 @@
                      syms))])))))
   (set-union (gather imports (set))
              (if (equal? (path->string (module-being-compiled))
-                         "/home/jerry/gosh/bi.gosh")
+                         (root-path "bi.gosh"))
                  (set)
-                 (list->set (modsyms '(file "/home/jerry/gosh/bi.rkt"))))))
+                 (list->set (modsyms `(file ,(root-path "bi.rkt")))))))
 
 (define (ppfile filename val)
   (with-output-to-file filename (lambda () (write val) (newline))
@@ -761,14 +682,14 @@
                        (only-in racket/set set? set-count)
                        (only-in racket/string string-trim)
                        (only-in racket/port with-output-to-string)
-                       (file "/home/jerry/gosh/runtime.rkt")
-                         (file "/home/jerry/gosh/toplevel.rkt")
+                       (file ,(root-path "runtime.rkt"))
+                       (file ,(root-path "toplevel.rkt"))
 ;;                         (file "/home/jerry/gosh/pcomb.rkt")
-                         ,@(if (equal? (path->string (module-being-compiled))
-                                       "/home/jerry/gosh/bi.gosh")
-                               '(db)
-                               '((file "/home/jerry/gosh/bi.rkt")))
-                         ,@(make-requires (imports))))
+                       ,@(if (equal? (path->string (module-being-compiled))
+                                     (root-path "bi.gosh"))
+                             '(db)
+                             `((file ,(root-path "bi.rkt"))))
+                       ,@(make-requires (imports))))
 
         (newline)
         (write `(provide ,@exported-sym-list

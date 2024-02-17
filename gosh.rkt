@@ -1,5 +1,7 @@
 #lang racket/base
 (require (except-in racket/control set)
+         array/dynamic
+         (only-in racket/set set seteq set-member? set-add set-add! mutable-set set->list set-count)
          "parse.rkt" "compile.rkt" "runtime.rkt"
          "bi.rkt"
          "toplevel.rkt"
@@ -8,7 +10,9 @@
 
                                         ;(provide run-gosh)
 (provide run-gosh
+         eval-gosh
          (all-from-out racket/base
+                       array/dynamic
                        "parse.rkt"
                        "runtime.rkt"
                        "compile.rkt"
@@ -24,6 +28,9 @@
    [(current-namespace gosh-user-ns)]
     (repl)))
 
+(define (eval-gosh str)
+  (with-input-from-string str gosh-exec))
+
 (module+ main
          (parameterize
           [(current-namespace gosh-user-ns)]
@@ -33,9 +40,7 @@
           (let ([args (current-command-line-arguments)])
             (if (= (vector-length args) 0)
                 (repl)
-                (with-input-from-string
-                    (vector-ref args 0)
-                  (lambda () (gosh-exec)))))))
+                (eval-gosh (vector-ref args 0))))))
 
 
 

@@ -8,7 +8,7 @@
                                         ;racket/trace
          racket/rerequire racket/match
          (only-in racket/string string-replace)
-                                        ;racket/pretty
+                                        racket/pretty
          parser-tools/lex)
 
 (provide (all-defined-out))
@@ -979,7 +979,7 @@
     (cond [(eq? op '**) 'expt]
           [(eq? op '+=) '.addfold]
           [(eq? op '++) '.addcontainerfold]
-          [else op]))
+          [else (maybe-rename op)]))
   (let ([cont-var (gensym "cont-")])
     (parameterize
         [(dollar-var-max 0)
@@ -1878,29 +1878,43 @@
   (let ([fn (gensym "fun-")]
         [fnresult (gensym "funresult-")]
         [acc (gensym "acc-")]
-        [curr (gensym "curr-")])
+        [curr (gensym "curr-")]
+        [first-time (gensym "first-time-")]
+        [fail (gensym "fail-")]
+        [failed (gensym "failed-")])
     (gcomp
      fun
      `(lambda (,fn)
-        ,(if init
-             (gcomp
-              init
-              `(lambda (,acc)
-                 ,(gcomp
-                   exp
-                   `(lambda (,curr)
-                      (,fn (lambda (,fnresult) (set! ,acc ,fnresult))
-                           (mlist ,acc ,curr))))
-                 (,cont ,acc)))
-             `(let ([,acc #f])
-                ,(gcomp
-                  exp
-                  `(lambda (,curr)
-                     (if ,acc
-                         (,fn (lambda (,fnresult) (set! ,acc ,fnresult))
-                              (mlist ,acc ,curr))
-                         (set! ,acc ,curr))))
-                (,cont ,acc)))))))
+        (call/ec
+         (lambda (,fail)
+           ,(if init
+                (gcomp
+                 init
+                 `(lambda (,acc)
+                    ,(gcomp
+                      exp
+                      `(lambda (,curr)
+                         (let ([,failed #t])
+                           (,fn (lambda (,fnresult)
+                                  (set! ,failed #f)
+                                  (set! ,acc ,fnresult))
+                                (mlist ,acc ,curr))
+                           (when ,failed (,fail)))))
+                    (,cont ,acc)))
+                 `(let ([,acc #f] [,first-time #t])
+                    ,(gcomp
+                      exp
+                      `(lambda (,curr)
+                         (if ,first-time
+                             (begin (set! ,acc ,curr)
+                                    (set! ,first-time #f))
+                             (let ([,failed #t])
+                               (,fn (lambda (,fnresult)
+                                      (set! ,failed #f)
+                                      (set! ,acc ,fnresult))
+                                    (mlist ,acc ,curr))
+                               (when ,failed (,fail))))))
+                    (,cont ,acc)))))))))
 
 (define (det? exp)
   (match exp
@@ -1936,7 +1950,7 @@
     [(list 'fetch table key) #f]
     [(list 'if test t e) (and (det? t) (det? e))]
     [(list ':: args ...) (andmap semidet? args)]
-    [(list ':~> var exp) #f]
+    [(list '==> var exp) #f]
     [(list ':! name) #t]
     [(list 'function-clause
            (list (and discriminator (or '=! '<! '>! '<? '>? '>~))
@@ -2032,7 +2046,7 @@
     [(list 'fetch table key) (and (semidet? table) (semidet? key))]
     [(list 'if test t e) (and (semidet? t) (semidet? e))]
     [(list ':: args ...) (andmap semidet? args)]
-    [(list ':~> var exp) (semidet? exp)]
+    [(list '==> var exp) (semidet? exp)]
     [(list ':! name) #t]
     [(list 'function-clause
            (list (and discriminator (or '=! '<! '>! '<? '>? '>~))
@@ -2143,7 +2157,7 @@
     [(list 'fetch table key) (compile-fetch table key cont)]
     [(list 'if test t e) (compile-if test t e cont)]
     [(list ':: args ...) (compile-recseq args cont)]
-    [(list ':~> var exp) (compile-recbind var exp cont)]
+    [(list '==> var exp) (compile-recbind var exp cont)]
     [(list ':! func-name) (compile-func-clause-pop func-name cont)]
     [(list 'assoc left right) (compile-assoc left right cont)]
     [(list ':= container arglist item) (compile-:= container arglist item cont)]
@@ -2263,15 +2277,15 @@
 (define (gosh-compile exp cont)
   (set! exp (depos exp))
   (when (getenv "GOSH_PPRINT") (pprint #t))
-;  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))
                  (app-refs '())
                  (clause-names '())
                  (top-level-vars (mutable-set))]
     (let ([compiled (gcomp exp cont)])
-      ;; (when (pprint)
-      ;;   (pretty-print (simplify compiled)))
+      (when (pprint)
+        (pretty-print (simplify compiled)))
       `(begin
          ,@(map (lambda (v) `(define ,v #f)) (set->list (top-level-vars)))
          (for-each .set-up-external-prog-lookup! ',(app-refs))
@@ -2282,12 +2296,12 @@
 
 (define (gosh-file-compile exp cont)
   (set! exp (depos exp))
-  ;; (when (getenv "GOSH_PPRINT") (pprint #t))
-  ;; (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
+  (when (getenv "GOSH_PPRINT") (pprint #t))
+  (when (getenv "GOSH_PPRINT_PARSED") (pretty-print exp))
   (parameterize [(dets (make-hasheq))
                  (semidets (make-hasheq))]
     (let ([compiled (gcomp exp cont)])
-      ;; (when (pprint)
-      ;;   (pretty-print (simplify compiled)))
+      (when (pprint)
+        (pretty-print (simplify compiled)))
       compiled)))
 

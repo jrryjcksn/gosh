@@ -29,6 +29,15 @@
 ;;                            (seq->list (expand (cdr seq))))]
 ;;         [else seq]))
 
+(define (colon-single-value str)
+  (.gosh-sprint (first (grun str 'colon))))
+(define (colon-all-values str)
+  (.gosh-sprint (grun str 'colon)))
+(define (dot-single-value str)
+  (.gosh-sprint (first (grun str 'default))))
+(define (dot-all-values str)
+  (.gosh-sprint (grun str 'default)))
+
 (define (grun str mode)
   ;; (pprint #t)
   (adjust-return-code)
@@ -69,37 +78,37 @@
    (let ([current-ensure 0])
      (lambda (mode)
        (define (perform-check result exp vars mode)
-         (define (do-check)
-           (parameterize
-            [(.free-vars (if (empty? vars)
-                             (make-hash)
-                             (make-hash
-                              (map (lambda (l)
-                                     (cons (string->symbol
-                                            (string-append
-                                             "<toplevel>.."
-                                             (symbol->string (first l))))
-                                           (second l)))
-                                   vars))))]
-            (if (list? exp)
-                (check-gosh-equal? (last (map (lambda (e) (grun e mode)) exp))
-                                   result
-                                   (format "~s" exp))
-                (check-gosh-equal? (grun exp mode) result exp))))
-           (with-handlers
-            ([exn? (lambda (_) (check-equal? 'error result))])
-            (do-check)))
-       (values
-        (lambda (result exp . vars)
-          (when (getenv "PRINT_TESTS")
-            (printf "ENSURE: ~s <- ~a~%" result exp))
-          (perform-check result exp vars mode)
-          (set! current-ensure (add1 current-ensure))
-          (when (getenv "PRINT_TESTS")
-            (printf "ENSURED(~s): ~s~%" current-ensure result)))
-        (lambda (result exp . vars)
-          (parameterize ([pprint #t])
-                        (perform-check result exp vars mode)))))))
+         (parameterize
+             [(.free-vars (if (empty? vars)
+                              (make-hash)
+                              (make-hash
+                               (map (lambda (l)
+                                      (cons (string->symbol
+                                             (string-append
+                                              "<toplevel>.."
+                                              (symbol->string (first l))))
+                                            (second l)))
+                                    vars))))]
+           (if (eq? result 'error)
+               (if (list? exp)
+                   (check-exn exn:fail? (lambda () (last (map (lambda (e) (grun e mode)) exp))))
+                   (check-exn exn:fail? (lambda () (grun exp mode))))
+               (if (list? exp)
+                   (check-gosh-equal? (last (map (lambda (e) (grun e mode)) exp))
+                                      result
+                                      (format "~s" exp))
+                   (check-gosh-equal? (grun exp mode) result exp)))))
+         (values
+          (lambda (result exp . vars)
+            (when (getenv "PRINT_TESTS")
+              (printf "ENSURE: ~s <- ~a~%" result exp))
+            (perform-check result exp vars mode)
+            (set! current-ensure (add1 current-ensure))
+            (when (getenv "PRINT_TESTS")
+              (printf "ENSURED(~s): ~s~%" current-ensure result)))
+          (lambda (result exp . vars)
+            (parameterize ([pprint #t])
+              (perform-check result exp vars mode)))))))
 
 (define-values (ensure ensurep) (make-ensures 'colon))
 (define-values (ensure-shell ensure-shellp) (make-ensures 'default))
@@ -205,17 +214,17 @@
 (ensure '(1 1 2 3 5 8 13) "1::1::%1+%2 while % < 21")
 (ensure '(1 1 3 5 13 21 55 89) "(1::1::%1+%2 when % rem 2 > 0) while % < 100")
 (ensure '(28) "28 when !(3 < 2)")
-(ensure '((1 2 3 4 5)) " :~> $ones <- @*(1||1 + (^$ones while % < 5))")
+(ensure '((1 2 3 4 5)) " ==> $ones <- @*(1||1 + (^$ones while % < 5))")
 (ensure '((2 3 5 7 11 13 17))
-       " :~> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0))[x] while $x < 19))")
+       " ==> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0))[x] while $x < 19))")
 (ensure '((2 3 5 7 11 13 17))
-        " :~> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0)) in %) while % < 19)")
+        " ==> $primes <- @*(2||((3::%1+2 ~> $x when !(^$primes ~> $p while $p * $p <= $x in $x rem $p == 0)) in %) while % < 19)")
 (ensure '((2 3 5 7 11 13 17))
-        " :~> $p <- @*(2||3::%1+2 when !(% rem (^$p while % * % <= %%) == 0) while % < 19)")
+        " ==> $p <- @*(2||3::%1+2 when !(% rem (^$p while % * % <= %%) == 0) while % < 19)")
 (ensure '(4) "sqrt[16]")
 (ensure '((1 2 3)) "reverse[[3,2,1]]")
 (ensure '(25) "sqrt[head[reverse[[1, 2, 625]]]]")
-(ensure '(11) "(:~> $p <- @*(2||3::%1+2 when !(% rem (^$p while % * % <= %%) == 0))) ~> [_, _, _, _, $eleven . _] in $eleven")
+(ensure '(11) "(==> $p <- @*(2||3::%1+2 when !(% rem (^$p while % * % <= %%) == 0))) ~> [_, _, _, _, $eleven . _] in $eleven")
 (ensure '(6) '("=! x[] -> 6" "x[]"))
 (ensure '(28) '("=! y[$a] -> 6+$a" "y[22]"))
 (ensure '(6 28) '("=! y[$a, $b] -> $a||$b" "y[6, 28]"))
@@ -324,17 +333,12 @@
 (ensure '(6 28) '("=! gorp[] -> 6" ">! gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(28) '("=! gorp[] -> 6" "<? gorp[] ^|> $x -> $x * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
 (ensure '(6) '("=! gorp[] -> 6" ">? gorp[] ^|> $x -> % * 2 when % rem 7 == 0" "(6||14||9) | gorp[]"))
-;; (ensure-shell '("checkpoint")
-;;               "cat $(ls -df /home/jerry/.hg/hgrc /home/jerry/.hg/last-message.txt) | grep checkpoint")
-;;                 ;; "result=$(cat /tmp/echotest)"
-;;                 ;; "rm /tmp/echotest"
-;;                 ;; "echo $result"))
-(ensure '(("bzip2"))
-        '("=! twos[] |> -> ^% when % ~> $\".*2\""
-          "@(ls[\"/bin\"] | grep[\"bz\"] | sort[\"-r\"] | twos[])"))
-(ensure '(("bzip2"))
-        '("=! twos[] |> -> ^% when % ~> $\".*2\""
-          "@(ls['/bin'] | grep[bz] | sort['-r'] | twos[])"))
+(ensure '(("bash"))
+        '("=! twos[] |> -> ^% when % ~> $\"b.*sh\""
+          "@(ls[\"/bin\"] | grep[\"bash\"] | sort[\"-r\"] | twos[])"))
+(ensure '(("bash"))
+        '("=! twos[] |> -> ^% when % ~> $\"b.*sh\""
+          "@(ls['/bin'] | grep[bash] | sort['-r'] | twos[])"))
 (ensure '(("bzop2"))
         '("=! twos[] |> -> ^% when % ~> $\".*2\""
           "=! ls $any -> bzop2"
@@ -474,7 +478,7 @@
 (ensure '(5) "{length($*)}[\"jerry\"]")
 (ensure '(5) "{length}[\"jerry\"]")
 (ensure '(10) "{*}[2,5]")
-(ensure '(#t) "{>} ~> $gt in $gt[7,5]")
+(ensure '(5) "{>} ~> $gt in $gt[7,5]")
 (ensure '((1 2 3)) "@:(1, (1||2||3))")
 (ensure '((1 2 3)) "@:(200, (1||2||3))")
 (ensure '((1 2 3)) "1 in @:(%, (1||2||3))")
@@ -628,7 +632,7 @@
         (test-dir2-match "*t"))
 (ensure-shell (map test-dir2 '("foobad" "foogolight" "foogolightly" "foogot"))
               (list (string-append "tdir2=" test-dir2-base)
-                    "/bin/ls ${tdir2}/foo$(echo '*')"))
+                    "/bin/ls ${tdir2}/foo*"))
 (ensure-shell '("foogolight" "got")
               (list (string-append "cd " test-dir2-base)
                     "/bin/ls foo$(/bin/ls go*)"))
@@ -641,23 +645,23 @@
 (ensure-shell '("foogolight"  "foogolightly"  "golight")
               (list (string-append "cd " test-dir2-base)
                     "/bin/ls *o[l]*"))
-(ensure-shell '(6 28) '("load /home/jerry/gosh/testdata/base.gosh"
-                        "load /home/jerry/gosh/testdata/ext.gosh"
+(ensure-shell '(6 28) '("load /Users/jerry/src/github.com/jrryjcksn/gosh/testdata/base.gosh"
+                        "load /Users/jerry/src/github.com/jrryjcksn/gosh/testdata/ext.gosh"
                         "bar"))
 (ensure-shell '("this is a test" "that was a test")
               '("echo this is a test && echo that was a test"))
-(ensure-shell '() '("grep xxx /tmp && echo that was a test"))
+(ensure-shell '() '("grep -s xxx /tmp && echo that was a test"))
 (ensure-shell '("this is a test")
               '("echo this is a test || echo that was a test"))
 (ensure-shell '("that was a test")
-              '("grep xxx /tmp || echo that was a test"))
+              '("grep -s xxx /tmp || echo that was a test"))
 (ensure-shell `("that was a test")
               '(":=! flameout[] -> error[foo]."
                 "flameout >& /dev/null || echo that was a test"))
 (ensure-shell `("foo")
               '(":=! noflameout[] -> foo."
                 "noflameout || echo that was a test"))
-(ensure-shell '("2") '("grep xxx /tmp" "echo $?"))
+(ensure-shell '("2") '("grep -s xxx /tmp" "echo $?"))
 (ensure-shell '("0") '("echo xxx" "echo $?"))
 (ensure-shell '("x") '("echo foo | grep bar || echo x"))
 (ensure-shell '() '("echo foo | grep bar && echo x"))

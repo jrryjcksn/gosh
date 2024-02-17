@@ -25,6 +25,10 @@
 (define gosh-ns (namespace-anchor->namespace a))
 (define gosh-namespace (make-parameter gosh-ns))
 
+(define parse-continuations (make-parameter #f))
+
+(define gosh-root "/Users/jerry/src/github.com/jrryjcksn/gosh")
+
 (define module-name (make-parameter #f))
 (define .cmd-success (make-parameter #t))
 (define .throw-to-or. (make-parameter (lambda (x) x)))
@@ -68,6 +72,10 @@
 (define (.look-up-free-var name)
   (or (hash-ref (.env) name #f)
       (hash-ref (.free-vars) name "")))
+
+(define .gosh-root "/Users/jerry/src/github.com/jrryjcksn/gosh")
+
+(define (root-path item) (string-append .gosh-root "/" item))
 
 (define .gosh-home
   (or (getenv "GOSH_HOME") (string-append (getenv "HOME") "/.gosh")))
@@ -153,6 +161,10 @@
     (when debugging (.debug))
     (reverse result)))
 
+(define (.start-parse tokens combinator)
+  (parameterize [(parse-continuations (make-hash))]
+    (combinator tokens)))
+
 ;; (define-syntax (gcall stx)
 ;;   (let* ([exp (syntax->datum stx)] [fun (cadr exp)] [res (gensym "result")]
 ;;          [debugging (gensym "debugging-")])
@@ -225,11 +237,11 @@
           (parameterize [(current-namespace ns)]
                         (namespace-require 'racket/match)
                         (namespace-require
-                         '(file "/home/jerry/gosh/gosh.rkt"))
+                         `(file ,(string-join `(,gosh-root "gosh.rkt") "/")))
                         (init-script-variables path args)
-                      (with-input-from-file
+                        (with-input-from-file
                           (path->string (simplify-path path))
-                        (lambda () (.exec cont))))))))
+                          (lambda () (.exec cont))))))))
 
 (define (.set-up-external-prog-lookup! namestr)
   (define name (string->symbol namestr))
